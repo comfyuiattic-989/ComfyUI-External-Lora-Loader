@@ -1,0 +1,39 @@
+{
+  "backend_state": {
+    "LORA_CACHE": {
+      "type": "Dictionary",
+      "key": "string (absolute_file_path)",
+      "value": "torch_tensor_dict (weights)",
+      "description": "Global persistent storage in system RAM."
+    },
+    "supported_extensions": [".safetensors", ".ckpt"],
+    "drive_list": {
+      "type": "List[string]",
+      "example": ["C:/", "D:/", "Z:/", "/mnt/drive1", "/home/user/drive2"],
+      "description": "List of available drives for file browsing."
+    }
+  },
+  "api_payloads": {
+    "list_files_request": {
+      "drive": "string",
+      "path": "string"
+    },
+    "list_files_response": {
+      "status": "string (success|error)",
+      "files": "List[string]",
+      "error_message": "string|null"
+    }
+  },
+  "node_widgets": {
+    "model": "MODEL (Input Slot)",
+    "clip": "CLIP (Input Slot)",
+    "drive": "COMBO (Dropdown)",
+    "sub_path": "STRING (Text Input)",
+    "lora_name": "COMBO (Dynamic Dropdown)",
+    "strength": "FLOAT (Slider/Input)"
+  },
+  "execution_outputs": {
+    "model": "MODEL (Patched)",
+    "clip": "CLIP (Patched)"
+  }
+}

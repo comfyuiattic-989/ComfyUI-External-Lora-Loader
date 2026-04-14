@@ -1,0 +1,53 @@
+openapi: 3.0.0
+info:
+  title: External LoRA Loader API
+  version: 1.0.0
+  description: Bridge between ComfyUI web interface and local filesystem.
+
+paths:
+  /external_lora/list_files:
+    post:
+      summary: Scans a directory for LoRA files.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                drive:
+                  type: string
+                  example: "D:/"
+                path:
+                  type: string
+                  example: "AI/Models/Loras"
+      responses:
+        200:
+          description: List of valid model files found.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: string
+                    example: ["anime_style.safetensors", "detailer.ckpt"]
+        404:
+          description: Directory not found or inaccessible.
+
+  /external_lora/clear_cache:
+    post:
+      summary: Flushes the LORA_CACHE dictionary in System RAM.
+      responses:
+        200:
+          description: Cache cleared successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "cleared"
