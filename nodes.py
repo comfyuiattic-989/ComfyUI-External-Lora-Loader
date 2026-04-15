@@ -18,7 +18,9 @@ class ExternalLoraLoader:
                 "clip": ("CLIP",),
                 "drive": (DRIVE_LIST or ["C:/"],),
                 "sub_path": ("STRING", {"default": "", "multiline": False}),
-                "lora_name": (["none"],),
+                # Keep this as a STRING on the backend so ComfyUI does not
+                # validate against a stale static combo list before execution.
+                "lora_name": ("STRING", {"default": "none", "multiline": False}),
                 "model_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
                 "clip_strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
                 "max_cache_mb": ("INT", {"default": 2048, "min": 128, "max": 32768, "step": 128}),
