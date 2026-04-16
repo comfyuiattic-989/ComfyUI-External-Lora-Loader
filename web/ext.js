@@ -289,8 +289,8 @@ app.registerExtension({
 
                 row.addEventListener("click", (e) => onNodeClick(e, data));
                 if (isFile) {
-                    row.addEventListener("dblclick", async (e) => {
-                        await onNodeClick(e, data);
+                    row.addEventListener("dblclick", (e) => {
+                        e.stopPropagation();
                         commitSelection();
                     });
                 }
