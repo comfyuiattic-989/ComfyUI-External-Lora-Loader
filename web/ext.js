@@ -7,14 +7,6 @@ function hideWidget(node, widget) {
     node.setSize(node.computeSize());
 }
 
-// D3 module cached at module level so it only loads once per page
-let _d3 = null;
-async function loadD3() {
-    if (_d3) return _d3;
-    _d3 = await import("https://cdn.jsdelivr.net/npm/d3@7/+esm");
-    return _d3;
-}
-
 // Inject modal CSS once into document.head
 let _stylesInjected = false;
 function injectStyles() {
@@ -231,8 +223,6 @@ app.registerExtension({
 
         // D3 tree state (per node instance)
         let treeRootData = null;
-        let _d3root = null;
-        let _d3update = null;
         let _idCounter = 0;
 
         function _nextId() { return ++_idCounter; }
@@ -310,23 +300,6 @@ app.registerExtension({
             }
         }
 
-        // --- rebuildAndUpdate: rebuilds D3 hierarchy from treeRootData ---
-        function rebuildAndUpdate() {
-            if (!_d3root || !_d3update || !treeRootData) return;
-            const oldById = new Map();
-            _d3root.descendants().forEach(n => oldById.set(n.data._id, { x: n.x, y: n.y }));
-            const newRoot = _d3.hierarchy(treeRootData, d => d.children);
-            newRoot.descendants().forEach(n => {
-                const old = oldById.get(n.data._id);
-                if (old) { n.x0 = old.x; n.y0 = old.y; }
-                else { n.x0 = _d3root.x0 || 0; n.y0 = _d3root.y0 || 0; }
-            });
-            newRoot.x0 = _d3root.x0 || 0;
-            newRoot.y0 = _d3root.y0 || 0;
-            _d3root = newRoot;
-            _d3update(_d3root);
-        }
-
         // --- onNodeClick: file select or folder lazy-load + toggle ---
         async function onNodeClick(event, data) {
             if (data.type === "file") {
@@ -390,173 +363,8 @@ app.registerExtension({
             renderTree();
         }
 
-        // --- buildD3Tree: render horizontal tidy tree with D3 ---
-        async function buildD3Tree(containerEl, rootData) {
-            const d3 = await loadD3();
-
-            // Clear previous render
-            containerEl.innerHTML = "";
-
-            const width = containerEl.clientWidth || 600;
-            const margin = { top: 20, right: 160, bottom: 20, left: 80 };
-
-            const svg = d3.select(containerEl).append("svg")
-                .attr("width", "100%")
-                .style("font", "13px sans-serif")
-                .style("user-select", "none")
-                .style("background", "transparent");
-
-            const g = svg.append("g")
-                .attr("transform", `translate(${margin.left},${margin.top})`);
-
-            let root = d3.hierarchy(rootData, d => d.children);
-            root.x0 = 0;
-            root.y0 = 0;
-            // Position virtual root off-screen so drives start at x=0
-            root.y = -margin.left;
-
-            const treeLayout = d3.tree().nodeSize([24, 160]);
-
-            const linkGroup = g.append("g")
-                .attr("fill", "none")
-                .attr("stroke", "#555")
-                .attr("stroke-opacity", 0.4)
-                .attr("stroke-width", 1.5);
-            const nodeGroup = g.append("g")
-                .attr("cursor", "pointer")
-                .attr("pointer-events", "all");
-
-            function update(source) {
-                treeLayout(root);
-
-                // Skip virtual root: only render drive nodes and below
-                const allNodes = root.descendants();
-                const nodes = allNodes.slice(1);
-                const links = root.links().filter(l => l.source !== root);
-
-                // Offset y so drives start at the left edge
-                const yOffset = margin.left;
-                nodes.forEach(d => { d.y = d.y - yOffset; });
-
-                // Compute SVG dimensions from node extents
-                const xs = nodes.map(d => d.x);
-                const minX = nodes.length ? Math.min(...xs) : 0;
-                const maxX = nodes.length ? Math.max(...xs) : 0;
-                const treeHeight = maxX - minX + margin.top + margin.bottom + 40;
-                const ys = nodes.map(d => d.y);
-                const maxY = nodes.length ? Math.max(...ys) : 0;
-                const treeWidth = maxY + margin.left + margin.right + 160;
-
-                svg.attr("height", treeHeight)
-                   .attr("width", Math.max(treeWidth, width));
-                g.attr("transform", `translate(${margin.left},${margin.top - minX + 20})`);
-
-                // --- Links ---
-                const link = linkGroup.selectAll("path").data(links, d => d.target.data._id);
-
-                const linkEnter = link.enter().append("path")
-                    .attr("d", () => {
-                        const sx = source.x0 !== undefined ? source.x0 : 0;
-                        const sy = source.y0 !== undefined ? source.y0 - yOffset : 0;
-                        return d3.linkHorizontal()({ source: [sy, sx], target: [sy, sx] });
-                    });
-
-                link.merge(linkEnter).transition().duration(250)
-                    .attr("d", d => d3.linkHorizontal()({
-                        source: [d.source.y, d.source.x],
-                        target: [d.target.y, d.target.x]
-                    }));
-
-                link.exit().transition().duration(250)
-                    .attr("d", () => {
-                        const sx = source.x !== undefined ? source.x : 0;
-                        const sy = source.y !== undefined ? source.y : 0;
-                        return d3.linkHorizontal()({ source: [sy, sx], target: [sy, sx] });
-                    }).remove();
-
-                // --- Nodes ---
-                const node = nodeGroup.selectAll("g.node").data(nodes, d => d.data._id);
-
-                const nodeEnter = node.enter().append("g")
-                    .attr("class", "node")
-                    .attr("transform", () => {
-                        const sx = source.x0 !== undefined ? source.x0 : 0;
-                        const sy = source.y0 !== undefined ? source.y0 - yOffset : 0;
-                        return `translate(${sy},${sx})`;
-                    })
-                    .attr("opacity", 0)
-                    .on("click", (event, d) => onNodeClick(event, d, update));
-
-                // Circle marker
-                nodeEnter.append("circle")
-                    .attr("r", 5)
-                    .attr("fill", d => d.data.type === "file"
-                        ? "var(--comfy-input-bg, #555)"
-                        : (d.data._children || (d.data.children && d.data.children.length) ? "#555" : "#999"))
-                    .attr("stroke", d => d.data.type === "file" ? "#7eb8f7" : "#555")
-                    .attr("stroke-width", d => d.data.type === "file" ? 2 : 1);
-
-                // Label
-                nodeEnter.append("text")
-                    .attr("dy", "0.32em")
-                    .attr("x", d => (d.data.type !== "file" && !d.children) ? -8 : 8)
-                    .attr("text-anchor", d => (d.data.type !== "file" && !d.children) ? "end" : "start")
-                    .attr("fill", d => d.data.type === "file" ? "#7eb8f7" : "var(--fg-color, #ddd)")
-                    .text(d => d.data.name)
-                    .clone(true).lower()
-                    .attr("stroke", "var(--comfy-menu-bg, #353535)")
-                    .attr("stroke-width", 3);
-
-                const nodeMerge = node.merge(nodeEnter);
-
-                nodeMerge.transition().duration(250)
-                    .attr("transform", d => `translate(${d.y},${d.x})`)
-                    .attr("opacity", 1);
-
-                // Update circle fill/stroke on state change
-                nodeMerge.select("circle")
-                    .attr("fill", d => {
-                        if (d.data.type === "file") return d.data._selected ? "#7eb8f7" : "var(--comfy-input-bg, #555)";
-                        return d.data.children && d.data.children.length ? "#555" : "#999";
-                    })
-                    .attr("stroke", d => d.data.type === "file" ? "#7eb8f7" : "#555");
-
-                // Update text
-                nodeMerge.select("text:not([stroke])")
-                    .attr("x", d => (d.data.type !== "file" && !d.children) ? -8 : 8)
-                    .attr("text-anchor", d => (d.data.type !== "file" && !d.children) ? "end" : "start")
-                    .attr("fill", d => {
-                        if (d.data.type === "file") return d.data._selected ? "#fff" : "#7eb8f7";
-                        return "var(--fg-color, #ddd)";
-                    })
-                    .attr("font-weight", d => d.data._selected ? "bold" : "normal");
-
-                node.exit().transition().duration(250)
-                    .attr("transform", () => {
-                        const sx = source.x !== undefined ? source.x : 0;
-                        const sy = source.y !== undefined ? source.y : 0;
-                        return `translate(${sy},${sx})`;
-                    })
-                    .attr("opacity", 0)
-                    .remove();
-
-                // Save old positions for next transition
-                allNodes.forEach(d => { d.x0 = d.x; d.y0 = d.y; });
-            }
-
-            // Initial render
-            update(root);
-
-            // Expose root reference for rebuildAndUpdate
-            return {
-                get root() { return root; },
-                set root(r) { root = r; },
-                update
-            };
-        }
-
-        // --- autoExpandD3ToPath: traverse tree data to saved path ---
-        async function autoExpandD3ToPath(drive, segments, savedFile) {
+        // --- autoExpandToPath: traverse tree data to saved path ---
+        async function autoExpandToPath(drive, segments, savedFile) {
             if (!treeRootData) return;
             let cur = (treeRootData.children || []).find(c => _normDrive(c.drive) === _normDrive(drive));
             if (!cur) return;
@@ -701,7 +509,7 @@ app.registerExtension({
             header.appendChild(title);
             header.appendChild(closeBtn);
 
-            // Body — single full-width D3 tree container
+            // Body — scrollable tree container
             const body = document.createElement("div");
             body.className = "ell-modal-body";
 
@@ -785,36 +593,10 @@ app.registerExtension({
                 const savedFile  = loraNameWidget.value !== "none" ? loraNameWidget.value : null;
                 if (savedDrive) {
                     const segs = savedPath ? savedPath.split(/[/\\]/).filter(Boolean) : [];
-                    await autoExpandD3ToPath(savedDrive, segs, savedFile);
+                    await autoExpandToPath(savedDrive, segs, savedFile);
                 }
             } catch {
                 if (statusEl) statusEl.textContent = "Failed to load drives";
-            }
-        }
-
-        // Active rebuild implementation (set after buildD3Tree so it has access to the result ref)
-        let _activeRebuild = null;
-
-        // Override rebuildAndUpdate to dispatch to the active implementation
-        function rebuildAndUpdate() {
-            if (_activeRebuild) {
-                _activeRebuild();
-            } else {
-                // Fallback before first open
-                if (!_d3root || !_d3update || !_d3 || !treeRootData) return;
-                const oldRoot = _d3root;
-                const oldById = new Map();
-                oldRoot.descendants().forEach(n => oldById.set(n.data._id, { x: n.x, y: n.y }));
-                const newRoot = _d3.hierarchy(treeRootData, d => d.children);
-                newRoot.descendants().forEach(n => {
-                    const old = oldById.get(n.data._id);
-                    if (old) { n.x0 = old.x; n.y0 = old.y; }
-                    else { n.x0 = oldRoot.x0 || 0; n.y0 = oldRoot.y0 || 0; }
-                });
-                newRoot.x0 = oldRoot.x0 || 0;
-                newRoot.y0 = oldRoot.y0 || 0;
-                _d3root = newRoot;
-                _d3update(newRoot);
             }
         }
 
