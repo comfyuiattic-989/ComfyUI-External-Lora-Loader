@@ -747,14 +747,15 @@ app.registerExtension({
             positionModal();
 
             if (onKeyDown) { document.removeEventListener("keydown", onKeyDown); onKeyDown = null; }
-            onKeyDown = (e) => { if (e.key === "Escape") closeModal(); };
+            onKeyDown = (e) => {
+                if (e.key === "Escape") closeModal();
+                else if (e.key === "Enter" && browserState.selectedFile) commitSelection();
+            };
             document.addEventListener("keydown", onKeyDown);
 
             browserState.selectedFile = null;
             if (selectBtn) { selectBtn.disabled = true; selectBtn.textContent = "Select"; }
             if (statusEl) statusEl.textContent = "Loading drives\u2026";
-
-            const d3 = await loadD3();
 
             try {
                 const resp = await fetch("/external_lora/browse", {
@@ -762,10 +763,10 @@ app.registerExtension({
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({})
                 });
+                if (!resp.ok) throw new Error(resp.statusText);
                 const data = await resp.json();
                 const drives = data.dirs || [];
 
-                // Build virtual root (not rendered; drives are the top-level nodes)
                 treeRootData = {
                     name: "root", type: "root", drive: "", segments: [],
                     _loaded: true, _id: _nextId(), _selected: false,
@@ -777,36 +778,8 @@ app.registerExtension({
                 };
 
                 if (statusEl) statusEl.textContent = "";
+                renderTree();
 
-                // Build D3 tree
-                const result = await buildD3Tree(treeContainerEl, treeRootData);
-                _d3root = result.root;
-                _d3update = result.update;
-
-                // Patch rebuildAndUpdate to use the result object's root setter
-                const _resultRef = result;
-                // Override module-level rebuildAndUpdate to keep result.root in sync
-                const _rebuildImpl = () => {
-                    if (!_d3root || !_d3update || !_d3 || !treeRootData) return;
-                    const oldRoot = _d3root;
-                    const oldById = new Map();
-                    oldRoot.descendants().forEach(n => oldById.set(n.data._id, { x: n.x, y: n.y }));
-                    const newRoot = _d3.hierarchy(treeRootData, d => d.children);
-                    newRoot.descendants().forEach(n => {
-                        const old = oldById.get(n.data._id);
-                        if (old) { n.x0 = old.x; n.y0 = old.y; }
-                        else { n.x0 = oldRoot.x0 || 0; n.y0 = oldRoot.y0 || 0; }
-                    });
-                    newRoot.x0 = oldRoot.x0 || 0;
-                    newRoot.y0 = oldRoot.y0 || 0;
-                    _d3root = newRoot;
-                    _resultRef.root = newRoot;
-                    _d3update(newRoot);
-                };
-                // Replace the closure-captured rebuildAndUpdate implementation
-                _activeRebuild = _rebuildImpl;
-
-                // Auto-expand if saved path exists
                 const savedDrive = driveWidget.value || "";
                 const savedPath  = subPathWidget.value || "";
                 const savedFile  = loraNameWidget.value !== "none" ? loraNameWidget.value : null;
