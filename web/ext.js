@@ -351,8 +351,8 @@ app.registerExtension({
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ drive: data.drive, path }),
                     });
+                    if (!resp.ok) throw new Error(resp.statusText);
                     const json = await resp.json();
-                    data._loaded = true;
                     const dirs  = json.dirs  || [];
                     const files = json.files || [];
                     data.children = [
@@ -370,6 +370,7 @@ app.registerExtension({
                         })),
                     ];
                     data._children = null;
+                    data._loaded = true;
                     if (statusEl) statusEl.textContent = "";
                 } catch {
                     if (statusEl) statusEl.textContent = "Error loading";
