@@ -249,6 +249,67 @@ app.registerExtension({
             [...(n.children || []), ...(n._children || [])].forEach(clearFileSelection);
         }
 
+        // --- renderTree: rebuild the Explorer-style tree DOM ---
+        function renderTree() {
+            if (!treeContainerEl || !treeRootData) return;
+            treeContainerEl.innerHTML = "";
+
+            function renderNode(data, depth) {
+                const isFile  = data.type === "file";
+                const isDrive = data.type === "drive";
+
+                const row = document.createElement("div");
+                row.className = "ell-row" + (data._selected ? " ell-row-selected" : "");
+                row.style.paddingLeft = (depth * 16 + 4) + "px";
+
+                // Arrow: ▶ collapsed, ▼ expanded, space for files
+                const arrow = document.createElement("span");
+                arrow.className = "ell-row-arrow";
+                if (isFile) {
+                    arrow.textContent = "\u00a0";
+                } else {
+                    arrow.textContent = data.children !== null ? "\u25bc" : "\u25b6";
+                }
+
+                // Icon
+                const icon = document.createElement("span");
+                icon.className = "ell-row-icon";
+                if (isDrive)     icon.textContent = "\uD83D\uDDB4"; // 🖴
+                else if (isFile) icon.textContent = "\uD83D\uDCC4"; // 📄
+                else             icon.textContent = data.children !== null ? "\uD83D\uDCC2" : "\uD83D\uDCC1"; // 📂 / 📁
+
+                // Label
+                const label = document.createElement("span");
+                label.className = "ell-row-label";
+                label.textContent = data.name;
+
+                row.appendChild(arrow);
+                row.appendChild(icon);
+                row.appendChild(label);
+
+                row.addEventListener("click", (e) => onNodeClick(e, data));
+                if (isFile) {
+                    row.addEventListener("dblclick", async (e) => {
+                        await onNodeClick(e, data);
+                        commitSelection();
+                    });
+                }
+
+                treeContainerEl.appendChild(row);
+
+                // Recurse into expanded children
+                if (data.children) {
+                    for (const child of data.children) {
+                        renderNode(child, depth + 1);
+                    }
+                }
+            }
+
+            for (const drive of (treeRootData.children || [])) {
+                renderNode(drive, 0);
+            }
+        }
+
         // --- rebuildAndUpdate: rebuilds D3 hierarchy from treeRootData ---
         function rebuildAndUpdate() {
             if (!_d3root || !_d3update || !treeRootData) return;
