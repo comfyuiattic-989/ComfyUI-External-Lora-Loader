@@ -61,6 +61,7 @@ function injectStyles() {
             height: 22px; line-height: 22px;
             cursor: pointer;
             white-space: nowrap;
+            user-select: none;
             color: var(--fg-color, #ddd);
             border: 1px solid transparent;
             box-sizing: border-box;
@@ -91,6 +92,7 @@ function injectStyles() {
         .ell-row-label {
             flex: 1;
             overflow: hidden;
+            white-space: nowrap;
             text-overflow: ellipsis;
             padding-right: 8px;
         }
