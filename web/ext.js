@@ -7,6 +7,14 @@ function hideWidget(node, widget) {
     node.setSize(node.computeSize());
 }
 
+// D3 module cached at module level so it only loads once per page
+let _d3 = null;
+async function loadD3() {
+    if (_d3) return _d3;
+    _d3 = await import("https://cdn.jsdelivr.net/npm/d3@7/+esm");
+    return _d3;
+}
+
 // Inject modal CSS once into document.head
 let _stylesInjected = false;
 function injectStyles() {
@@ -42,44 +50,50 @@ function injectStyles() {
         .ell-modal-body {
             display: flex; flex: 1; min-height: 0; overflow: hidden;
         }
-        .ell-tree-pane {
-            width: 210px; min-width: 210px; max-width: 210px;
-            border-right: 1px solid var(--border-color, #4e4e4e);
-            overflow-y: auto;
-            background: var(--comfy-input-bg, #222);
-            padding: 4px 0;
+        .ell-tree-container {
+            flex: 1; overflow: auto; padding: 4px 0;
+            background: var(--comfy-input-bg, #1a1a1a);
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
         }
-        .ell-file-pane {
-            flex: 1; overflow-y: auto; padding: 4px 0;
-        }
-        .ell-tree-row {
+        .ell-row {
             display: flex; align-items: center;
-            padding: 5px 8px;
+            height: 22px; line-height: 22px;
             cursor: pointer;
-            color: var(--input-text, #ddd);
-            font-size: 13px; user-select: none;
-            border-radius: 3px;
+            white-space: nowrap;
+            color: var(--fg-color, #ddd);
+            border: 1px solid transparent;
+            box-sizing: border-box;
         }
-        .ell-tree-row:hover { background: var(--border-color, #4e4e4e); }
-        .ell-tree-row.ell-tree-selected {
-            background: rgba(100,130,200,0.25);
-            outline: 1px solid var(--border-color, #666);
+        .ell-row:hover {
+            background: rgba(255,255,255,0.07);
         }
-        .ell-tree-tri {
-            font-size: 11px; min-width: 14px;
-            display: inline-block; text-align: center;
-            opacity: 0.7; margin-right: 4px;
+        .ell-row-selected {
+            background: #0078d4;
+            color: #fff;
+        }
+        .ell-row-selected:hover {
+            background: #1084d8;
+        }
+        .ell-row-arrow {
+            display: inline-block;
+            width: 14px; text-align: center;
+            flex-shrink: 0;
+            font-size: 9px;
+            color: var(--input-text, #aaa);
+        }
+        .ell-row-selected .ell-row-arrow { color: #fff; }
+        .ell-row-icon {
+            display: inline-block;
+            width: 20px; text-align: center;
             flex-shrink: 0;
         }
-        .ell-tree-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .ell-entry {
-            display: flex; align-items: center; gap: 8px;
-            padding: 6px 18px; cursor: pointer;
-            color: var(--input-text, #ddd); font-size: 13px; user-select: none;
+        .ell-row-label {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding-right: 8px;
         }
-        .ell-entry:hover { background: var(--comfy-input-bg, #222); }
-        .ell-entry.ell-selected { background: var(--border-color, #4e4e4e); }
-        .ell-entry.ell-file { color: var(--fg-color, #fff); }
         .ell-modal-footer {
             display: flex; justify-content: space-between; align-items: center;
             padding: 8px 14px;
@@ -201,263 +215,354 @@ app.registerExtension({
         // 5. Browser navigation state
         const browserState = {
             drive: "", pathSegments: [], selectedFile: null,
-            treeRoots: [],           // root tree node objects
-            selectedTreeNode: null,  // currently highlighted tree node
         };
 
         // 6. Modal DOM (built lazily on first open)
         let modalOverlay = null;
-        let treePaneEl = null;
-        let filePaneEl = null;
+        let treeContainerEl = null;
         let statusEl = null;
         let selectBtn = null;
         let _boxPositioned = false;
 
-        // Shared keydown handler for Escape key (declared at enclosing scope)
+        // Shared keydown handler for Escape key
         let onKeyDown = null;
 
-        // Navigation generation counter to discard stale responses
-        let navGen = 0;
+        // D3 tree state (per node instance)
+        let treeRootData = null;
+        let _d3root = null;
+        let _d3update = null;
+        let _idCounter = 0;
 
-        // --- Tree node factory ---
-        function makeTreeNode(drive, segments, name) {
-            return {
-                drive, segments, name,
-                children: null,   // null=unloaded | []=empty | [...]= loaded
-                expanded: false,
-                el: null,         // .ell-tree-row DOM element
-                childrenEl: null  // children container DOM element
-            };
-        }
-
-        // --- renderTreeNode(treeNode, depth) ---
-        function renderTreeNode(treeNode, depth) {
-            const row = document.createElement("div");
-            row.className = "ell-tree-row";
-            row.style.paddingLeft = (8 + depth * 16) + "px";
-
-            const triangle = document.createElement("span");
-            triangle.className = "ell-tree-tri";
-            triangle.textContent = "\u25B8"; // ▸
-
-            const label = document.createElement("span");
-            label.className = "ell-tree-label";
-            label.textContent = treeNode.name;
-
-            row.appendChild(triangle);
-            row.appendChild(label);
-
-            const childrenEl = document.createElement("div");
-            childrenEl.style.display = "none";
-
-            treeNode.el = row;
-            treeNode.childrenEl = childrenEl;
-
-            triangle.addEventListener("click", e => {
-                e.stopPropagation();
-                if (treeNode.expanded) {
-                    collapseTreeNode(treeNode, triangle);
-                } else {
-                    expandTreeNode(treeNode, triangle, depth);
-                }
-            });
-
-            row.addEventListener("click", e => {
-                e.stopPropagation();
-                selectTreeNode(treeNode);
-            });
-
-            return { row, childrenEl };
-        }
-
-        // --- expandTreeNode(treeNode, triangleEl, depth) ---
-        async function expandTreeNode(treeNode, triangleEl, depth) {
-            treeNode.expanded = true;
-            if (triangleEl) triangleEl.textContent = "\u25BE"; // ▾
-            if (treeNode.childrenEl) treeNode.childrenEl.style.display = "";
-
-            // Already loaded — no fetch needed
-            if (treeNode.children !== null) return;
-
-            const gen = ++navGen;
-            try {
-                const resp = await fetch("/external_lora/browse", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ drive: treeNode.drive, path: treeNode.segments.join("/") }),
-                });
-                const data = await resp.json();
-                if (gen !== navGen) return;
-
-                const dirs = data.dirs || [];
-                treeNode.children = dirs.map(name =>
-                    makeTreeNode(treeNode.drive, [...treeNode.segments, name], name)
-                );
-
-                if (treeNode.childrenEl) {
-                    treeNode.childrenEl.innerHTML = "";
-                    treeNode.children.forEach(childNode => {
-                        const { row, childrenEl } = renderTreeNode(childNode, depth + 1);
-                        treeNode.childrenEl.appendChild(row);
-                        treeNode.childrenEl.appendChild(childrenEl);
-                    });
-                }
-            } catch (err) {
-                if (gen !== navGen) return;
-                treeNode.children = [];
-            }
-        }
-
-        // --- collapseTreeNode(treeNode, triangleEl) ---
-        function collapseTreeNode(treeNode, triangleEl) {
-            treeNode.expanded = false;
-            if (triangleEl) triangleEl.textContent = "\u25B8"; // ▸
-            if (treeNode.childrenEl) treeNode.childrenEl.style.display = "none";
-        }
-
-        // --- selectTreeNode(treeNode) ---
-        async function selectTreeNode(treeNode) {
-            // Deselect previous
-            if (browserState.selectedTreeNode && browserState.selectedTreeNode.el) {
-                browserState.selectedTreeNode.el.classList.remove("ell-tree-selected");
-            }
-
-            browserState.selectedTreeNode = treeNode;
-            browserState.drive = treeNode.drive;
-            browserState.pathSegments = treeNode.segments;
-            browserState.selectedFile = null;
-            if (selectBtn) selectBtn.disabled = true;
-
-            if (treeNode.el) treeNode.el.classList.add("ell-tree-selected");
-
-            const gen = ++navGen;
-            try {
-                const resp = await fetch("/external_lora/browse", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ drive: treeNode.drive, path: treeNode.segments.join("/") }),
-                });
-                const data = await resp.json();
-                if (gen !== navGen) return;
-
-                const dirs = data.dirs || [];
-                const files = data.files || [];
-
-                // Cache children for future expand (no DOM render here)
-                if (treeNode.children === null) {
-                    treeNode.children = dirs.map(name =>
-                        makeTreeNode(treeNode.drive, [...treeNode.segments, name], name)
-                    );
-                }
-
-                renderFilePane(files);
-                if (statusEl) statusEl.textContent = "";
-            } catch (err) {
-                if (gen !== navGen) return;
-                if (statusEl) statusEl.textContent = "Network error";
-                renderFilePane([]);
-            }
-        }
-
-        // --- renderFilePane(files) ---
-        function renderFilePane(files) {
-            if (!filePaneEl) return;
-            filePaneEl.innerHTML = "";
-
-            if (files.length === 0) {
-                const empty = document.createElement("div");
-                empty.className = "ell-entry";
-                empty.style.color = "var(--input-text, #aaa)";
-                empty.style.cursor = "default";
-                empty.textContent = "No LoRA files found in this folder";
-                filePaneEl.appendChild(empty);
-                return;
-            }
-
-            files.forEach(name => {
-                const el = document.createElement("div");
-                el.className = "ell-entry ell-file";
-                el.dataset.name = name;
-                el.textContent = "\uD83D\uDCC4 " + name;
-                el.onclick = () => {
-                    filePaneEl.querySelectorAll(".ell-entry").forEach(e => e.classList.remove("ell-selected"));
-                    el.classList.add("ell-selected");
-                    browserState.selectedFile = name;
-                    if (selectBtn) selectBtn.disabled = false;
-                };
-                el.ondblclick = () => {
-                    browserState.selectedFile = name;
-                    commitSelection();
-                };
-                filePaneEl.appendChild(el);
-            });
-        }
+        function _nextId() { return ++_idCounter; }
 
         // --- _normDrive: normalize drive strings for comparison ---
         function _normDrive(d) {
             return (d || "").replace(/\\/g, "/").replace(/\/+$/, "") + "/";
         }
 
-        // --- autoExpandToPath(drive, segments) ---
-        async function autoExpandToPath(drive, segments) {
-            // Find the matching drive root
-            let cur = browserState.treeRoots.find(r => _normDrive(r.drive) === _normDrive(drive));
+        // --- clearFileSelection: recursively clears _selected on all nodes ---
+        function clearFileSelection(n) {
+            if (!n) return;
+            n._selected = false;
+            [...(n.children || []), ...(n._children || [])].forEach(clearFileSelection);
+        }
+
+        // --- rebuildAndUpdate: rebuilds D3 hierarchy from treeRootData ---
+        function rebuildAndUpdate() {
+            if (!_d3root || !_d3update || !treeRootData) return;
+            const oldById = new Map();
+            _d3root.descendants().forEach(n => oldById.set(n.data._id, { x: n.x, y: n.y }));
+            const newRoot = _d3.hierarchy(treeRootData, d => d.children);
+            newRoot.descendants().forEach(n => {
+                const old = oldById.get(n.data._id);
+                if (old) { n.x0 = old.x; n.y0 = old.y; }
+                else { n.x0 = _d3root.x0 || 0; n.y0 = _d3root.y0 || 0; }
+            });
+            newRoot.x0 = _d3root.x0 || 0;
+            newRoot.y0 = _d3root.y0 || 0;
+            _d3root = newRoot;
+            _d3update(_d3root);
+        }
+
+        // --- onNodeClick: lazy load + toggle ---
+        async function onNodeClick(event, d, update) {
+            const data = d.data;
+
+            if (data.type === "file") {
+                // File selection — clear previous selection then mark this one
+                clearFileSelection(treeRootData);
+                data._selected = true;
+                browserState.drive = data.drive;
+                browserState.pathSegments = data.segments.slice(0, -1);
+                browserState.selectedFile = data.name;
+                if (selectBtn) {
+                    selectBtn.disabled = false;
+                    selectBtn.textContent = "Select";
+                }
+                if (statusEl) statusEl.textContent = data.name;
+                rebuildAndUpdate();
+                return;
+            }
+
+            // Folder / drive node — lazy load then toggle
+            if (!data._loaded) {
+                if (statusEl) statusEl.textContent = "Loading\u2026";
+                const path = data.segments.join("/");
+                try {
+                    const resp = await fetch("/external_lora/browse", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ drive: data.drive, path }),
+                    });
+                    const json = await resp.json();
+                    data._loaded = true;
+                    const dirs  = json.dirs  || [];
+                    const files = json.files || [];
+                    const childData = [
+                        ...dirs.map(name  => ({
+                            name, type: "dir",  drive: data.drive,
+                            segments: [...data.segments, name],
+                            _loaded: false, children: null, _children: null,
+                            _id: _nextId(), _selected: false
+                        })),
+                        ...files.map(name => ({
+                            name, type: "file", drive: data.drive,
+                            segments: [...data.segments, name],
+                            _loaded: true,  children: null, _children: null,
+                            _id: _nextId(), _selected: false
+                        })),
+                    ];
+                    if (childData.length === 0) {
+                        data.children = [];
+                        data._children = null;
+                    } else {
+                        data.children = childData;
+                        data._children = null;
+                    }
+                    if (statusEl) statusEl.textContent = "";
+                } catch {
+                    if (statusEl) statusEl.textContent = "Error loading";
+                    return;
+                }
+            } else {
+                // Toggle: collapse if open, expand if closed
+                if (d.children) {
+                    // Collapse: save children array to data._children, hide from hierarchy
+                    data._children = data.children;
+                    data.children = null;
+                } else {
+                    // Expand: restore from data._children
+                    data.children = data._children || [];
+                    data._children = null;
+                }
+            }
+
+            rebuildAndUpdate();
+        }
+
+        // --- buildD3Tree: render horizontal tidy tree with D3 ---
+        async function buildD3Tree(containerEl, rootData) {
+            const d3 = await loadD3();
+
+            // Clear previous render
+            containerEl.innerHTML = "";
+
+            const width = containerEl.clientWidth || 600;
+            const margin = { top: 20, right: 160, bottom: 20, left: 80 };
+
+            const svg = d3.select(containerEl).append("svg")
+                .attr("width", "100%")
+                .style("font", "13px sans-serif")
+                .style("user-select", "none")
+                .style("background", "transparent");
+
+            const g = svg.append("g")
+                .attr("transform", `translate(${margin.left},${margin.top})`);
+
+            let root = d3.hierarchy(rootData, d => d.children);
+            root.x0 = 0;
+            root.y0 = 0;
+            // Position virtual root off-screen so drives start at x=0
+            root.y = -margin.left;
+
+            const treeLayout = d3.tree().nodeSize([24, 160]);
+
+            const linkGroup = g.append("g")
+                .attr("fill", "none")
+                .attr("stroke", "#555")
+                .attr("stroke-opacity", 0.4)
+                .attr("stroke-width", 1.5);
+            const nodeGroup = g.append("g")
+                .attr("cursor", "pointer")
+                .attr("pointer-events", "all");
+
+            function update(source) {
+                treeLayout(root);
+
+                // Skip virtual root: only render drive nodes and below
+                const allNodes = root.descendants();
+                const nodes = allNodes.slice(1);
+                const links = root.links().filter(l => l.source !== root);
+
+                // Offset y so drives start at the left edge
+                const yOffset = margin.left;
+                nodes.forEach(d => { d.y = d.y - yOffset; });
+
+                // Compute SVG dimensions from node extents
+                const xs = nodes.map(d => d.x);
+                const minX = nodes.length ? Math.min(...xs) : 0;
+                const maxX = nodes.length ? Math.max(...xs) : 0;
+                const treeHeight = maxX - minX + margin.top + margin.bottom + 40;
+                const ys = nodes.map(d => d.y);
+                const maxY = nodes.length ? Math.max(...ys) : 0;
+                const treeWidth = maxY + margin.left + margin.right + 160;
+
+                svg.attr("height", treeHeight)
+                   .attr("width", Math.max(treeWidth, width));
+                g.attr("transform", `translate(${margin.left},${margin.top - minX + 20})`);
+
+                // --- Links ---
+                const link = linkGroup.selectAll("path").data(links, d => d.target.data._id);
+
+                const linkEnter = link.enter().append("path")
+                    .attr("d", () => {
+                        const sx = source.x0 !== undefined ? source.x0 : 0;
+                        const sy = source.y0 !== undefined ? source.y0 - yOffset : 0;
+                        return d3.linkHorizontal()({ source: [sy, sx], target: [sy, sx] });
+                    });
+
+                link.merge(linkEnter).transition().duration(250)
+                    .attr("d", d => d3.linkHorizontal()({
+                        source: [d.source.y, d.source.x],
+                        target: [d.target.y, d.target.x]
+                    }));
+
+                link.exit().transition().duration(250)
+                    .attr("d", () => {
+                        const sx = source.x !== undefined ? source.x : 0;
+                        const sy = source.y !== undefined ? source.y : 0;
+                        return d3.linkHorizontal()({ source: [sy, sx], target: [sy, sx] });
+                    }).remove();
+
+                // --- Nodes ---
+                const node = nodeGroup.selectAll("g.node").data(nodes, d => d.data._id);
+
+                const nodeEnter = node.enter().append("g")
+                    .attr("class", "node")
+                    .attr("transform", () => {
+                        const sx = source.x0 !== undefined ? source.x0 : 0;
+                        const sy = source.y0 !== undefined ? source.y0 - yOffset : 0;
+                        return `translate(${sy},${sx})`;
+                    })
+                    .attr("opacity", 0)
+                    .on("click", (event, d) => onNodeClick(event, d, update));
+
+                // Circle marker
+                nodeEnter.append("circle")
+                    .attr("r", 5)
+                    .attr("fill", d => d.data.type === "file"
+                        ? "var(--comfy-input-bg, #555)"
+                        : (d.data._children || (d.data.children && d.data.children.length) ? "#555" : "#999"))
+                    .attr("stroke", d => d.data.type === "file" ? "#7eb8f7" : "#555")
+                    .attr("stroke-width", d => d.data.type === "file" ? 2 : 1);
+
+                // Label
+                nodeEnter.append("text")
+                    .attr("dy", "0.32em")
+                    .attr("x", d => (d.data.type !== "file" && !d.children) ? -8 : 8)
+                    .attr("text-anchor", d => (d.data.type !== "file" && !d.children) ? "end" : "start")
+                    .attr("fill", d => d.data.type === "file" ? "#7eb8f7" : "var(--fg-color, #ddd)")
+                    .text(d => d.data.name)
+                    .clone(true).lower()
+                    .attr("stroke", "var(--comfy-menu-bg, #353535)")
+                    .attr("stroke-width", 3);
+
+                const nodeMerge = node.merge(nodeEnter);
+
+                nodeMerge.transition().duration(250)
+                    .attr("transform", d => `translate(${d.y},${d.x})`)
+                    .attr("opacity", 1);
+
+                // Update circle fill/stroke on state change
+                nodeMerge.select("circle")
+                    .attr("fill", d => {
+                        if (d.data.type === "file") return d.data._selected ? "#7eb8f7" : "var(--comfy-input-bg, #555)";
+                        return d.data.children && d.data.children.length ? "#555" : "#999";
+                    })
+                    .attr("stroke", d => d.data.type === "file" ? "#7eb8f7" : "#555");
+
+                // Update text
+                nodeMerge.select("text:not([stroke])")
+                    .attr("x", d => (d.data.type !== "file" && !d.children) ? -8 : 8)
+                    .attr("text-anchor", d => (d.data.type !== "file" && !d.children) ? "end" : "start")
+                    .attr("fill", d => {
+                        if (d.data.type === "file") return d.data._selected ? "#fff" : "#7eb8f7";
+                        return "var(--fg-color, #ddd)";
+                    })
+                    .attr("font-weight", d => d.data._selected ? "bold" : "normal");
+
+                node.exit().transition().duration(250)
+                    .attr("transform", () => {
+                        const sx = source.x !== undefined ? source.x : 0;
+                        const sy = source.y !== undefined ? source.y : 0;
+                        return `translate(${sy},${sx})`;
+                    })
+                    .attr("opacity", 0)
+                    .remove();
+
+                // Save old positions for next transition
+                allNodes.forEach(d => { d.x0 = d.x; d.y0 = d.y; });
+            }
+
+            // Initial render
+            update(root);
+
+            // Expose root reference for rebuildAndUpdate
+            return {
+                get root() { return root; },
+                set root(r) { root = r; },
+                update
+            };
+        }
+
+        // --- autoExpandD3ToPath: traverse tree data to saved path ---
+        async function autoExpandD3ToPath(drive, segments, savedFile) {
+            if (!treeRootData) return;
+            let cur = (treeRootData.children || []).find(c => _normDrive(c.drive) === _normDrive(drive));
             if (!cur) return;
 
-            // Expand each segment level with a private fetch (does not touch navGen)
             for (let i = 0; i < segments.length; i++) {
-                // Load children if not already loaded
-                if (cur.children === null) {
+                if (!cur._loaded) {
                     const path = cur.segments.join("/");
                     try {
                         const resp = await fetch("/external_lora/browse", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ drive: cur.drive, path }),
+                            body: JSON.stringify({ drive: cur.drive, path })
                         });
-                        const data = await resp.json();
-                        const dirs = data.dirs || [];
-                        cur.children = dirs.map(name =>
-                            makeTreeNode(cur.drive, [...cur.segments, name], name)
-                        );
-                        // Render children into the DOM
-                        cur.childrenEl.innerHTML = "";
-                        cur.children.forEach(child => {
-                            const { row, childrenEl } = renderTreeNode(child, i + 1);
-                            cur.childrenEl.appendChild(row);
-                            cur.childrenEl.appendChild(childrenEl);
-                        });
-                    } catch (_) {
+                        const json = await resp.json();
+                        cur._loaded = true;
+                        cur.children = [
+                            ...(json.dirs  || []).map(name => ({
+                                name, type: "dir",  drive: cur.drive,
+                                segments: [...cur.segments, name],
+                                _loaded: false, children: null, _children: null,
+                                _id: _nextId(), _selected: false
+                            })),
+                            ...(json.files || []).map(name => ({
+                                name, type: "file", drive: cur.drive,
+                                segments: [...cur.segments, name],
+                                _loaded: true,  children: null, _children: null,
+                                _id: _nextId(), _selected: false
+                            })),
+                        ];
+                    } catch {
                         break;
                     }
                 }
-
-                // Expand the current node in the tree UI
-                cur.expanded = true;
-                if (cur.childrenEl) cur.childrenEl.style.display = "block";
-                const tri = cur.el ? cur.el.querySelector(".ell-tree-tri") : null;
-                if (tri) tri.textContent = "▾";
-
-                // Move to the next segment
                 const next = (cur.children || []).find(c => c.name === segments[i]);
                 if (!next) break;
                 cur = next;
             }
 
-            // Select the final node through the normal path (this bumps navGen once and shows files)
-            await selectTreeNode(cur);
-
-            // Highlight the saved file in the file pane if present
-            if (browserState.selectedFile && filePaneEl) {
-                const target = browserState.selectedFile;
-                filePaneEl.querySelectorAll(".ell-entry.ell-file").forEach(el => {
-                    // Use data-name attribute for exact match (see Bug 3 fix)
-                    if (el.dataset.name === target) {
-                        el.classList.add("ell-selected");
-                        if (selectBtn) selectBtn.disabled = false;
+            // Highlight saved file
+            if (savedFile && cur.children) {
+                const fileNode = cur.children.find(c => c.type === "file" && c.name === savedFile);
+                if (fileNode) {
+                    clearFileSelection(treeRootData);
+                    fileNode._selected = true;
+                    browserState.drive = fileNode.drive;
+                    browserState.pathSegments = fileNode.segments.slice(0, -1);
+                    browserState.selectedFile = fileNode.name;
+                    if (selectBtn) {
+                        selectBtn.disabled = false;
+                        selectBtn.textContent = "Select";
                     }
-                });
+                    if (statusEl) statusEl.textContent = savedFile;
+                }
             }
+
+            rebuildAndUpdate();
         }
 
         // --- positionModal() ---
@@ -545,18 +650,14 @@ app.registerExtension({
             header.appendChild(title);
             header.appendChild(closeBtn);
 
-            // Body (split pane)
+            // Body — single full-width D3 tree container
             const body = document.createElement("div");
             body.className = "ell-modal-body";
 
-            treePaneEl = document.createElement("div");
-            treePaneEl.className = "ell-tree-pane";
+            treeContainerEl = document.createElement("div");
+            treeContainerEl.className = "ell-tree-container";
 
-            filePaneEl = document.createElement("div");
-            filePaneEl.className = "ell-file-pane";
-
-            body.appendChild(treePaneEl);
-            body.appendChild(filePaneEl);
+            body.appendChild(treeContainerEl);
 
             // Footer
             const footer = document.createElement("div");
@@ -589,53 +690,108 @@ app.registerExtension({
         }
 
         // --- openFileBrowser() ---
-        function openFileBrowser() {
+        async function openFileBrowser() {
             buildModal();
             modalOverlay.style.display = "block";
             positionModal();
 
-            const savedDrive = driveWidget.value || "";
-            const savedPath  = subPathWidget.value || "";
-            const savedFile  = loraNameWidget.value !== "none" ? loraNameWidget.value : null;
-            browserState.selectedFile = null;
-            if (selectBtn) selectBtn.disabled = true;
-
-            if (onKeyDown) {
-                document.removeEventListener("keydown", onKeyDown);
-                onKeyDown = null;
-            }
+            if (onKeyDown) { document.removeEventListener("keydown", onKeyDown); onKeyDown = null; }
             onKeyDown = (e) => { if (e.key === "Escape") closeModal(); };
             document.addEventListener("keydown", onKeyDown);
 
-            const gen = ++navGen;
+            browserState.selectedFile = null;
+            if (selectBtn) { selectBtn.disabled = true; selectBtn.textContent = "Select"; }
             if (statusEl) statusEl.textContent = "Loading drives\u2026";
 
-            fetch("/external_lora/browse", {
-                method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({})
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (gen !== navGen) return;
-                const drives = data.dirs || [];
-                browserState.treeRoots = drives.map(d => makeTreeNode(d, [], d));
-                treePaneEl.innerHTML = "";
-                browserState.treeRoots.forEach(rootNode => {
-                    const { row, childrenEl } = renderTreeNode(rootNode, 0);
-                    treePaneEl.appendChild(row);
-                    treePaneEl.appendChild(childrenEl);
+            const d3 = await loadD3();
+
+            try {
+                const resp = await fetch("/external_lora/browse", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({})
                 });
+                const data = await resp.json();
+                const drives = data.dirs || [];
+
+                // Build virtual root (not rendered; drives are the top-level nodes)
+                treeRootData = {
+                    name: "root", type: "root", drive: "", segments: [],
+                    _loaded: true, _id: _nextId(), _selected: false,
+                    children: drives.map(d => ({
+                        name: d, type: "drive", drive: d, segments: [],
+                        _loaded: false, children: null, _children: null,
+                        _id: _nextId(), _selected: false
+                    }))
+                };
+
                 if (statusEl) statusEl.textContent = "";
+
+                // Build D3 tree
+                const result = await buildD3Tree(treeContainerEl, treeRootData);
+                _d3root = result.root;
+                _d3update = result.update;
+
+                // Patch rebuildAndUpdate to use the result object's root setter
+                const _resultRef = result;
+                // Override module-level rebuildAndUpdate to keep result.root in sync
+                const _rebuildImpl = () => {
+                    if (!_d3root || !_d3update || !_d3 || !treeRootData) return;
+                    const oldRoot = _d3root;
+                    const oldById = new Map();
+                    oldRoot.descendants().forEach(n => oldById.set(n.data._id, { x: n.x, y: n.y }));
+                    const newRoot = _d3.hierarchy(treeRootData, d => d.children);
+                    newRoot.descendants().forEach(n => {
+                        const old = oldById.get(n.data._id);
+                        if (old) { n.x0 = old.x; n.y0 = old.y; }
+                        else { n.x0 = oldRoot.x0 || 0; n.y0 = oldRoot.y0 || 0; }
+                    });
+                    newRoot.x0 = oldRoot.x0 || 0;
+                    newRoot.y0 = oldRoot.y0 || 0;
+                    _d3root = newRoot;
+                    _resultRef.root = newRoot;
+                    _d3update(newRoot);
+                };
+                // Replace the closure-captured rebuildAndUpdate implementation
+                _activeRebuild = _rebuildImpl;
+
+                // Auto-expand if saved path exists
+                const savedDrive = driveWidget.value || "";
+                const savedPath  = subPathWidget.value || "";
+                const savedFile  = loraNameWidget.value !== "none" ? loraNameWidget.value : null;
                 if (savedDrive) {
-                    browserState.drive = savedDrive;
-                    browserState.pathSegments = savedPath ? savedPath.split(/[/\\]/).filter(Boolean) : [];
-                    browserState.selectedFile = savedFile;
-                    autoExpandToPath(savedDrive, browserState.pathSegments);
+                    const segs = savedPath ? savedPath.split(/[/\\]/).filter(Boolean) : [];
+                    await autoExpandD3ToPath(savedDrive, segs, savedFile);
                 }
-            })
-            .catch(() => {
-                if (gen !== navGen) return;
+            } catch {
                 if (statusEl) statusEl.textContent = "Failed to load drives";
-            });
+            }
+        }
+
+        // Active rebuild implementation (set after buildD3Tree so it has access to the result ref)
+        let _activeRebuild = null;
+
+        // Override rebuildAndUpdate to dispatch to the active implementation
+        function rebuildAndUpdate() {
+            if (_activeRebuild) {
+                _activeRebuild();
+            } else {
+                // Fallback before first open
+                if (!_d3root || !_d3update || !_d3 || !treeRootData) return;
+                const oldRoot = _d3root;
+                const oldById = new Map();
+                oldRoot.descendants().forEach(n => oldById.set(n.data._id, { x: n.x, y: n.y }));
+                const newRoot = _d3.hierarchy(treeRootData, d => d.children);
+                newRoot.descendants().forEach(n => {
+                    const old = oldById.get(n.data._id);
+                    if (old) { n.x0 = old.x; n.y0 = old.y; }
+                    else { n.x0 = oldRoot.x0 || 0; n.y0 = oldRoot.y0 || 0; }
+                });
+                newRoot.x0 = oldRoot.x0 || 0;
+                newRoot.y0 = oldRoot.y0 || 0;
+                _d3root = newRoot;
+                _d3update(newRoot);
+            }
         }
 
         function closeModal() {
