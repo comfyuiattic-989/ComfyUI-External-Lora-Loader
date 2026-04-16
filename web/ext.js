@@ -570,6 +570,7 @@ app.registerExtension({
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ drive: cur.drive, path })
                         });
+                        if (!resp.ok) throw new Error(resp.statusText);
                         const json = await resp.json();
                         cur._loaded = true;
                         cur.children = [
