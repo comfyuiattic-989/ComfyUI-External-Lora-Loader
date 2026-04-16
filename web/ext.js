@@ -612,7 +612,7 @@ app.registerExtension({
                 }
             }
 
-            rebuildAndUpdate();
+            renderTree();
         }
 
         // --- positionModal() ---
