@@ -16,59 +16,83 @@ function injectStyles() {
     style.textContent = `
         .ell-modal-overlay {
             position: fixed; inset: 0;
-            background: rgba(0,0,0,0.65);
-            display: flex; align-items: center; justify-content: center;
             z-index: 9999;
         }
         .ell-modal-box {
+            position: fixed;
             background: var(--comfy-menu-bg, #353535);
             border-radius: 8px;
             box-shadow: 0 4px 32px rgba(0,0,0,0.6);
-            width: min(680px, 90vw);
             display: flex; flex-direction: column;
             overflow: hidden;
-            max-height: 80vh;
         }
         .ell-modal-header {
             display: flex; justify-content: space-between; align-items: center;
             padding: 10px 14px;
             border-bottom: 1px solid var(--border-color, #4e4e4e);
             font-weight: bold; color: var(--fg-color, #fff);
+            cursor: move;
+            flex-shrink: 0;
+            user-select: none;
         }
         .ell-modal-close {
             background: none; border: none; color: var(--fg-color, #fff);
             cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 6px;
         }
-        .ell-breadcrumb-bar {
-            display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
-            padding: 6px 14px;
-            background: var(--comfy-input-bg, #222);
-            border-bottom: 1px solid var(--border-color, #4e4e4e);
-            min-height: 32px;
+        .ell-modal-body {
+            display: flex; flex: 1; min-height: 0; overflow: hidden;
         }
-        .ell-crumb {
-            color: var(--fg-color, #ddd); cursor: pointer;
-            padding: 2px 4px; border-radius: 3px; font-size: 13px;
+        .ell-tree-container {
+            flex: 1; overflow: auto; padding: 4px 0;
+            background: var(--comfy-input-bg, #1a1a1a);
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
         }
-        .ell-crumb:hover { background: var(--border-color, #4e4e4e); }
-        .ell-crumb-sep { color: var(--border-color, #4e4e4e); padding: 0 2px; user-select: none; }
-        .ell-file-list {
-            overflow-y: auto; flex: 1;
-            max-height: 420px; padding: 4px 0;
+        .ell-row {
+            display: flex; align-items: center;
+            height: 22px; line-height: 22px;
+            cursor: pointer;
+            white-space: nowrap;
+            user-select: none;
+            color: var(--fg-color, #ddd);
+            border: 1px solid transparent;
+            box-sizing: border-box;
         }
-        .ell-entry {
-            display: flex; align-items: center; gap: 8px;
-            padding: 6px 18px; cursor: pointer;
-            color: var(--input-text, #ddd); font-size: 13px; user-select: none;
+        .ell-row:hover {
+            background: rgba(255,255,255,0.07);
         }
-        .ell-entry:hover { background: var(--comfy-input-bg, #222); }
-        .ell-entry.ell-selected { background: var(--border-color, #4e4e4e); }
-        .ell-entry.ell-dir  { color: #7eb8f7; }
-        .ell-entry.ell-file { color: var(--fg-color, #fff); }
+        .ell-row-selected {
+            background: #0078d4;
+            color: #fff;
+        }
+        .ell-row-selected:hover {
+            background: #1084d8;
+        }
+        .ell-row-arrow {
+            display: inline-block;
+            width: 14px; text-align: center;
+            flex-shrink: 0;
+            font-size: 9px;
+            color: var(--input-text, #aaa);
+        }
+        .ell-row-selected .ell-row-arrow { color: #fff; }
+        .ell-row-icon {
+            display: inline-block;
+            width: 20px; text-align: center;
+            flex-shrink: 0;
+        }
+        .ell-row-label {
+            flex: 1;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            padding-right: 8px;
+        }
         .ell-modal-footer {
             display: flex; justify-content: space-between; align-items: center;
             padding: 8px 14px;
             border-top: 1px solid var(--border-color, #4e4e4e);
+            flex-shrink: 0;
         }
         .ell-status-text { font-size: 12px; color: var(--input-text, #aaa); }
         .ell-select-btn {
@@ -77,6 +101,17 @@ function injectStyles() {
             border: 1px solid var(--border-color, #4e4e4e); cursor: pointer;
         }
         .ell-select-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .ell-resize-handle {
+            position: absolute; right: 0; bottom: 0;
+            width: 16px; height: 16px; cursor: se-resize;
+            background: linear-gradient(135deg,
+                transparent 50%,
+                var(--border-color, #666) 50%, var(--border-color, #666) 60%,
+                transparent 60%, transparent 70%,
+                var(--border-color, #666) 70%, var(--border-color, #666) 80%,
+                transparent 80%);
+            opacity: 0.6;
+        }
     `;
     document.head.appendChild(style);
 }
@@ -103,6 +138,7 @@ app.registerExtension({
 
         // --- Debounce helper ---
         let debounceTimer = null;
+        let pathLabelWidget = null;
         function scheduleRefresh() {
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => refreshFiles(), 500);
@@ -162,7 +198,7 @@ app.registerExtension({
         injectStyles();
 
         // 3. Path label (read-only display)
-        const pathLabelWidget = node.addWidget("text", "selected_path", "No file selected", () => {});
+        pathLabelWidget = node.addWidget("text", "selected_path", "No file selected", () => {});
         setTimeout(() => {
             if (pathLabelWidget.inputEl) pathLabelWidget.inputEl.readOnly = true;
         }, 0);
@@ -171,21 +207,286 @@ app.registerExtension({
         const browseBtn = node.addWidget("button", "Browse\u2026", null, () => openFileBrowser());
 
         // 5. Browser navigation state
-        const browserState = { drive: "", pathSegments: [], selectedFile: null };
+        const browserState = {
+            drive: "", pathSegments: [], selectedFile: null,
+        };
 
         // 6. Modal DOM (built lazily on first open)
         let modalOverlay = null;
-        let fileListEl = null;
-        let breadcrumbEl = null;
+        let treeContainerEl = null;
         let statusEl = null;
         let selectBtn = null;
+        let _boxPositioned = false;
 
-        // Issue 2: shared keydown handler for Escape key (declared at enclosing scope)
+        // Shared keydown handler for Escape key
         let onKeyDown = null;
 
-        // Issue 3: navigation generation counter to discard stale responses
-        let navGen = 0;
+        // D3 tree state (per node instance)
+        let treeRootData = null;
+        let _idCounter = 0;
 
+        function _nextId() { return ++_idCounter; }
+
+        // --- _normDrive: normalize drive strings for comparison ---
+        function _normDrive(d) {
+            return (d || "").replace(/\\/g, "/").replace(/\/+$/, "") + "/";
+        }
+
+        // --- clearFileSelection: recursively clears _selected on all nodes ---
+        function clearFileSelection(n) {
+            if (!n) return;
+            n._selected = false;
+            [...(n.children || []), ...(n._children || [])].forEach(clearFileSelection);
+        }
+
+        // --- renderTree: rebuild the Explorer-style tree DOM ---
+        function renderTree() {
+            if (!treeContainerEl || !treeRootData) return;
+            treeContainerEl.innerHTML = "";
+
+            function renderNode(data, depth) {
+                const isFile  = data.type === "file";
+                const isDrive = data.type === "drive";
+
+                const row = document.createElement("div");
+                row.className = "ell-row" + (data._selected ? " ell-row-selected" : "");
+                row.style.paddingLeft = (depth * 16 + 4) + "px";
+
+                // Arrow: ▶ collapsed, ▼ expanded, space for files
+                const arrow = document.createElement("span");
+                arrow.className = "ell-row-arrow";
+                if (isFile) {
+                    arrow.textContent = "\u00a0";
+                } else {
+                    arrow.textContent = data.children !== null ? "\u25bc" : "\u25b6";
+                }
+
+                // Icon
+                const icon = document.createElement("span");
+                icon.className = "ell-row-icon";
+                if (isDrive)     icon.textContent = "\uD83D\uDDB4"; // 🖴
+                else if (isFile) icon.textContent = "\uD83D\uDCC4"; // 📄
+                else             icon.textContent = data.children !== null ? "\uD83D\uDCC2" : "\uD83D\uDCC1"; // 📂 / 📁
+
+                // Label
+                const label = document.createElement("span");
+                label.className = "ell-row-label";
+                label.textContent = data.name;
+
+                row.appendChild(arrow);
+                row.appendChild(icon);
+                row.appendChild(label);
+
+                row.addEventListener("click", (e) => onNodeClick(e, data));
+                if (isFile) {
+                    row.addEventListener("dblclick", (e) => {
+                        e.stopPropagation();
+                        commitSelection();
+                    });
+                }
+
+                treeContainerEl.appendChild(row);
+
+                // Recurse into expanded children
+                if (data.children) {
+                    for (const child of data.children) {
+                        renderNode(child, depth + 1);
+                    }
+                }
+            }
+
+            for (const drive of (treeRootData.children || [])) {
+                renderNode(drive, 0);
+            }
+        }
+
+        // --- onNodeClick: file select or folder lazy-load + toggle ---
+        async function onNodeClick(event, data) {
+            if (data.type === "file") {
+                clearFileSelection(treeRootData);
+                data._selected = true;
+                browserState.drive = data.drive;
+                browserState.pathSegments = data.segments.slice(0, -1);
+                browserState.selectedFile = data.name;
+                if (selectBtn) { selectBtn.disabled = false; selectBtn.textContent = "Select"; }
+                if (statusEl) statusEl.textContent = data.name;
+                renderTree();
+                return;
+            }
+
+            // Folder / drive — lazy load on first expand, then toggle
+            if (!data._loaded) {
+                if (statusEl) statusEl.textContent = "Loading\u2026";
+                const path = data.segments.join("/");
+                try {
+                    const resp = await fetch("/external_lora/browse", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ drive: data.drive, path }),
+                    });
+                    if (!resp.ok) throw new Error(resp.statusText);
+                    const json = await resp.json();
+                    const dirs  = json.dirs  || [];
+                    const files = json.files || [];
+                    data.children = [
+                        ...dirs.map(name => ({
+                            name, type: "dir", drive: data.drive,
+                            segments: [...data.segments, name],
+                            _loaded: false, children: null, _children: null,
+                            _id: _nextId(), _selected: false
+                        })),
+                        ...files.map(name => ({
+                            name, type: "file", drive: data.drive,
+                            segments: [...data.segments, name],
+                            _loaded: true, children: null, _children: null,
+                            _id: _nextId(), _selected: false
+                        })),
+                    ];
+                    data._children = null;
+                    data._loaded = true;
+                    if (statusEl) statusEl.textContent = "";
+                } catch {
+                    if (statusEl) statusEl.textContent = "Error loading";
+                    return;
+                }
+            } else {
+                // Toggle expand/collapse
+                if (data.children !== null) {
+                    data._children = data.children;
+                    data.children = null;
+                } else {
+                    data.children = data._children || [];
+                    data._children = null;
+                }
+            }
+
+            renderTree();
+        }
+
+        // --- autoExpandToPath: traverse tree data to saved path ---
+        async function autoExpandToPath(drive, segments, savedFile) {
+            if (!treeRootData) return;
+            let cur = (treeRootData.children || []).find(c => _normDrive(c.drive) === _normDrive(drive));
+            if (!cur) return;
+
+            for (let i = 0; i < segments.length; i++) {
+                if (!cur._loaded) {
+                    const path = cur.segments.join("/");
+                    try {
+                        const resp = await fetch("/external_lora/browse", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ drive: cur.drive, path })
+                        });
+                        if (!resp.ok) throw new Error(resp.statusText);
+                        const json = await resp.json();
+                        cur._loaded = true;
+                        cur.children = [
+                            ...(json.dirs  || []).map(name => ({
+                                name, type: "dir",  drive: cur.drive,
+                                segments: [...cur.segments, name],
+                                _loaded: false, children: null, _children: null,
+                                _id: _nextId(), _selected: false
+                            })),
+                            ...(json.files || []).map(name => ({
+                                name, type: "file", drive: cur.drive,
+                                segments: [...cur.segments, name],
+                                _loaded: true,  children: null, _children: null,
+                                _id: _nextId(), _selected: false
+                            })),
+                        ];
+                    } catch {
+                        break;
+                    }
+                }
+                const next = (cur.children || []).find(c => c.name === segments[i]);
+                if (!next) break;
+                cur = next;
+            }
+
+            // Highlight saved file
+            if (savedFile && cur.children) {
+                const fileNode = cur.children.find(c => c.type === "file" && c.name === savedFile);
+                if (fileNode) {
+                    clearFileSelection(treeRootData);
+                    fileNode._selected = true;
+                    browserState.drive = fileNode.drive;
+                    browserState.pathSegments = fileNode.segments.slice(0, -1);
+                    browserState.selectedFile = fileNode.name;
+                    if (selectBtn) {
+                        selectBtn.disabled = false;
+                        selectBtn.textContent = "Select";
+                    }
+                    if (statusEl) statusEl.textContent = savedFile;
+                }
+            }
+
+            renderTree();
+        }
+
+        // --- positionModal() ---
+        function positionModal() {
+            const box = modalOverlay ? modalOverlay.querySelector(".ell-modal-box") : null;
+            if (_boxPositioned || !box) return;
+            const initW = Math.min(700, window.innerWidth  * 0.88);
+            const initH = Math.min(520, window.innerHeight * 0.80);
+            box.style.width  = initW + "px";
+            box.style.height = initH + "px";
+            box.style.left   = Math.round((window.innerWidth  - initW) / 2) + "px";
+            box.style.top    = Math.round((window.innerHeight - initH) / 2) + "px";
+            _boxPositioned = true;
+        }
+
+        // --- makeDraggable(box, header) ---
+        function makeDraggable(box, header) {
+            header.addEventListener("pointerdown", (e) => {
+                if (e.target.closest(".ell-modal-close")) return;
+                const startX = e.clientX - box.offsetLeft;
+                const startY = e.clientY - box.offsetTop;
+                header.setPointerCapture(e.pointerId);
+                document.body.style.userSelect = "none";
+                function onMove(ev) {
+                    const minV = 40;
+                    let left = Math.max(minV - box.offsetWidth,  Math.min(window.innerWidth  - minV, ev.clientX - startX));
+                    let top  = Math.max(0,                        Math.min(window.innerHeight - minV, ev.clientY - startY));
+                    box.style.left = left + "px";
+                    box.style.top  = top  + "px";
+                }
+                function onUp() {
+                    header.removeEventListener("pointermove", onMove);
+                    header.removeEventListener("pointerup",   onUp);
+                    document.body.style.userSelect = "";
+                }
+                header.addEventListener("pointermove", onMove);
+                header.addEventListener("pointerup",   onUp);
+            });
+        }
+
+        // --- makeResizable(box, handle) ---
+        function makeResizable(box, handle) {
+            handle.addEventListener("pointerdown", (e) => {
+                e.stopPropagation();
+                const startX = e.clientX, startY = e.clientY;
+                const initW  = box.offsetWidth, initH = box.offsetHeight;
+                handle.setPointerCapture(e.pointerId);
+                document.body.style.userSelect = "none";
+                function onMove(ev) {
+                    const newW = Math.min(window.innerWidth  * 0.95, Math.max(480, initW + (ev.clientX - startX)));
+                    const newH = Math.min(window.innerHeight * 0.92, Math.max(350, initH + (ev.clientY - startY)));
+                    box.style.width  = newW + "px";
+                    box.style.height = newH + "px";
+                }
+                function onUp() {
+                    handle.removeEventListener("pointermove", onMove);
+                    handle.removeEventListener("pointerup",   onUp);
+                    document.body.style.userSelect = "";
+                }
+                handle.addEventListener("pointermove", onMove);
+                handle.addEventListener("pointerup",   onUp);
+            });
+        }
+
+        // --- buildModal() ---
         function buildModal() {
             if (modalOverlay) return; // already built
 
@@ -208,13 +509,14 @@ app.registerExtension({
             header.appendChild(title);
             header.appendChild(closeBtn);
 
-            // Breadcrumb
-            breadcrumbEl = document.createElement("div");
-            breadcrumbEl.className = "ell-breadcrumb-bar";
+            // Body — scrollable tree container
+            const body = document.createElement("div");
+            body.className = "ell-modal-body";
 
-            // File list
-            fileListEl = document.createElement("div");
-            fileListEl.className = "ell-file-list";
+            treeContainerEl = document.createElement("div");
+            treeContainerEl.className = "ell-tree-container";
+
+            body.appendChild(treeContainerEl);
 
             // Footer
             const footer = document.createElement("div");
@@ -229,165 +531,82 @@ app.registerExtension({
             footer.appendChild(statusEl);
             footer.appendChild(selectBtn);
 
+            // Resize handle
+            const resizeHandle = document.createElement("div");
+            resizeHandle.className = "ell-resize-handle";
+
             box.appendChild(header);
-            box.appendChild(breadcrumbEl);
-            box.appendChild(fileListEl);
+            box.appendChild(body);
             box.appendChild(footer);
+            box.appendChild(resizeHandle);
             modalOverlay.appendChild(box);
 
-            // Close on overlay click (outside box)
-            modalOverlay.addEventListener("click", (e) => {
-                if (e.target === modalOverlay) closeModal();
-            });
-
             document.body.appendChild(modalOverlay);
+
+            // Wire up drag and resize
+            makeDraggable(box, header);
+            makeResizable(box, resizeHandle);
         }
 
-        function openFileBrowser() {
+        // --- openFileBrowser() ---
+        async function openFileBrowser() {
             buildModal();
-            modalOverlay.style.display = "flex";
-            // Restore state from widget values so re-open continues from last location
-            const savedDrive = driveWidget.value || "";
-            const savedPath  = subPathWidget.value || "";
-            const savedFile  = loraNameWidget.value !== "none" ? loraNameWidget.value : null;
-            browserState.drive = savedDrive;
-            browserState.pathSegments = savedPath ? savedPath.split(/[/\\]/).filter(Boolean) : [];
-            browserState.selectedFile = savedFile;
+            modalOverlay.style.display = "block";
+            positionModal();
 
-            // Issue 2: register Escape key handler
-            onKeyDown = (e) => { if (e.key === "Escape") closeModal(); };
+            if (onKeyDown) { document.removeEventListener("keydown", onKeyDown); onKeyDown = null; }
+            onKeyDown = (e) => {
+                if (e.key === "Escape") closeModal();
+                else if (e.key === "Enter" && browserState.selectedFile) commitSelection();
+            };
             document.addEventListener("keydown", onKeyDown);
 
-            navigateTo(browserState.drive, browserState.pathSegments);
+            browserState.selectedFile = null;
+            if (selectBtn) { selectBtn.disabled = true; selectBtn.textContent = "Select"; }
+            if (statusEl) statusEl.textContent = "Loading drives\u2026";
+
+            try {
+                const resp = await fetch("/external_lora/browse", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({})
+                });
+                if (!resp.ok) throw new Error(resp.statusText);
+                const data = await resp.json();
+                const drives = data.dirs || [];
+
+                treeRootData = {
+                    name: "root", type: "root", drive: "", segments: [],
+                    _loaded: true, _id: _nextId(), _selected: false,
+                    children: drives.map(d => ({
+                        name: d, type: "drive", drive: d, segments: [],
+                        _loaded: false, children: null, _children: null,
+                        _id: _nextId(), _selected: false
+                    }))
+                };
+
+                if (statusEl) statusEl.textContent = "";
+                renderTree();
+
+                const savedDrive = driveWidget.value || "";
+                const savedPath  = subPathWidget.value || "";
+                const savedFile  = loraNameWidget.value !== "none" ? loraNameWidget.value : null;
+                if (savedDrive) {
+                    const segs = savedPath ? savedPath.split(/[/\\]/).filter(Boolean) : [];
+                    await autoExpandToPath(savedDrive, segs, savedFile);
+                }
+            } catch {
+                if (statusEl) statusEl.textContent = "Failed to load drives";
+            }
         }
 
         function closeModal() {
             if (modalOverlay) modalOverlay.style.display = "none";
-            // Issue 2: remove Escape key handler to avoid memory leak
+            // Remove Escape key handler to avoid memory leak
             if (onKeyDown) {
                 document.removeEventListener("keydown", onKeyDown);
                 onKeyDown = null;
             }
-        }
-
-        async function navigateTo(drive, segments) {
-            browserState.drive = drive;
-            browserState.pathSegments = segments;
-            browserState.selectedFile = null;
-            if (selectBtn) { selectBtn.disabled = true; }
-            if (statusEl)  { statusEl.textContent = "Loading\u2026"; }
-
-            renderBreadcrumb(drive, segments);
-
-            // Issue 3: capture generation token before async work
-            const gen = ++navGen;
-
-            const path = segments.join("/");
-            try {
-                const resp = await fetch("/external_lora/browse", {
-                    method:  "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body:    JSON.stringify({ drive, path }),
-                });
-                const data = await resp.json();
-                // Issue 3: discard stale responses
-                if (gen !== navGen) return;
-                if (!resp.ok) {
-                    if (statusEl) statusEl.textContent = `Error: ${data.error || resp.status}`;
-                    renderList([], []);
-                    return;
-                }
-                renderList(data.dirs || [], data.files || []);
-                if (statusEl) statusEl.textContent = "";
-            } catch (err) {
-                // Issue 3: discard stale responses
-                if (gen !== navGen) return;
-                if (statusEl) statusEl.textContent = "Network error";
-                renderList([], []);
-            }
-        }
-
-        function renderBreadcrumb(drive, segments) {
-            if (!breadcrumbEl) return;
-            breadcrumbEl.innerHTML = "";
-
-            // "Drives" root crumb
-            const rootCrumb = document.createElement("span");
-            rootCrumb.className = "ell-crumb";
-            rootCrumb.textContent = "Drives";
-            rootCrumb.onclick = () => navigateTo("", []);
-            breadcrumbEl.appendChild(rootCrumb);
-
-            if (drive) {
-                const sep1 = document.createElement("span");
-                sep1.className = "ell-crumb-sep";
-                sep1.textContent = "\u203a";
-                breadcrumbEl.appendChild(sep1);
-
-                const driveCrumb = document.createElement("span");
-                driveCrumb.className = "ell-crumb";
-                driveCrumb.textContent = drive;
-                driveCrumb.onclick = () => navigateTo(drive, []);
-                breadcrumbEl.appendChild(driveCrumb);
-
-                segments.forEach((seg, idx) => {
-                    const sep = document.createElement("span");
-                    sep.className = "ell-crumb-sep";
-                    sep.textContent = "\u203a";
-                    breadcrumbEl.appendChild(sep);
-
-                    const crumb = document.createElement("span");
-                    crumb.className = "ell-crumb";
-                    crumb.textContent = seg;
-                    crumb.onclick = () => navigateTo(drive, segments.slice(0, idx + 1));
-                    breadcrumbEl.appendChild(crumb);
-                });
-            }
-        }
-
-        function renderList(dirs, files) {
-            if (!fileListEl) return;
-            fileListEl.innerHTML = "";
-
-            if (dirs.length === 0 && files.length === 0) {
-                const empty = document.createElement("div");
-                empty.className = "ell-entry";
-                empty.style.color = "var(--input-text, #aaa)";
-                empty.style.cursor = "default";
-                // At root level (no drive) show helpful text; inside a folder show different text
-                empty.textContent = browserState.drive
-                    ? "No LoRA files found in this folder"
-                    : "No drives detected";
-                fileListEl.appendChild(empty);
-                return;
-            }
-
-            dirs.forEach(name => {
-                const el = document.createElement("div");
-                el.className = "ell-entry ell-dir";
-                el.textContent = "\uD83D\uDCC1 " + name;
-                // Issue 4: only onclick for directories; ondblclick removed to prevent double-navigation
-                el.onclick = () => navigateTo(browserState.drive, [...browserState.pathSegments, name]);
-                fileListEl.appendChild(el);
-            });
-
-            files.forEach(name => {
-                const el = document.createElement("div");
-                el.className = "ell-entry ell-file";
-                el.textContent = "\uD83D\uDCC4 " + name;
-                el.onclick = () => {
-                    // Deselect all, select this
-                    fileListEl.querySelectorAll(".ell-entry").forEach(e => e.classList.remove("ell-selected"));
-                    el.classList.add("ell-selected");
-                    browserState.selectedFile = name;
-                    if (selectBtn) selectBtn.disabled = false;
-                };
-                el.ondblclick = () => {
-                    browserState.selectedFile = name;
-                    commitSelection();
-                };
-                fileListEl.appendChild(el);
-            });
         }
 
         function commitSelection() {
@@ -447,6 +666,19 @@ app.registerExtension({
                 showTempLabel(clearCacheBtn, "Cache clear failed", 2000);
             }
         });
+
+        // --- Widget order splice (after all three addWidget calls) ---
+        // Final canvas order: drive(hidden), sub_path(hidden), selected_path, Browse…, lora_name, Clear Cache
+        {
+            const _loraIdx = node.widgets.indexOf(loraNameWidget);
+            const _btnIdx  = node.widgets.indexOf(browseBtn);
+            const _pathIdx = node.widgets.indexOf(pathLabelWidget);
+            node.widgets.splice(_btnIdx, 1);
+            node.widgets.splice(_pathIdx, 1);
+            node.widgets.splice(_loraIdx, 0, pathLabelWidget);
+            node.widgets.splice(_loraIdx + 1, 0, browseBtn);
+            node.setSize(node.computeSize());
+        }
 
         // Restore path label from persisted widget values on workflow load
         setTimeout(() => {
