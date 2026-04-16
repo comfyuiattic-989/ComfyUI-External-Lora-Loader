@@ -327,27 +327,21 @@ app.registerExtension({
             _d3update(_d3root);
         }
 
-        // --- onNodeClick: lazy load + toggle ---
-        async function onNodeClick(event, d, update) {
-            const data = d.data;
-
+        // --- onNodeClick: file select or folder lazy-load + toggle ---
+        async function onNodeClick(event, data) {
             if (data.type === "file") {
-                // File selection — clear previous selection then mark this one
                 clearFileSelection(treeRootData);
                 data._selected = true;
                 browserState.drive = data.drive;
                 browserState.pathSegments = data.segments.slice(0, -1);
                 browserState.selectedFile = data.name;
-                if (selectBtn) {
-                    selectBtn.disabled = false;
-                    selectBtn.textContent = "Select";
-                }
+                if (selectBtn) { selectBtn.disabled = false; selectBtn.textContent = "Select"; }
                 if (statusEl) statusEl.textContent = data.name;
-                rebuildAndUpdate();
+                renderTree();
                 return;
             }
 
-            // Folder / drive node — lazy load then toggle
+            // Folder / drive — lazy load on first expand, then toggle
             if (!data._loaded) {
                 if (statusEl) statusEl.textContent = "Loading\u2026";
                 const path = data.segments.join("/");
@@ -361,9 +355,9 @@ app.registerExtension({
                     data._loaded = true;
                     const dirs  = json.dirs  || [];
                     const files = json.files || [];
-                    const childData = [
-                        ...dirs.map(name  => ({
-                            name, type: "dir",  drive: data.drive,
+                    data.children = [
+                        ...dirs.map(name => ({
+                            name, type: "dir", drive: data.drive,
                             segments: [...data.segments, name],
                             _loaded: false, children: null, _children: null,
                             _id: _nextId(), _selected: false
@@ -371,36 +365,28 @@ app.registerExtension({
                         ...files.map(name => ({
                             name, type: "file", drive: data.drive,
                             segments: [...data.segments, name],
-                            _loaded: true,  children: null, _children: null,
+                            _loaded: true, children: null, _children: null,
                             _id: _nextId(), _selected: false
                         })),
                     ];
-                    if (childData.length === 0) {
-                        data.children = [];
-                        data._children = null;
-                    } else {
-                        data.children = childData;
-                        data._children = null;
-                    }
+                    data._children = null;
                     if (statusEl) statusEl.textContent = "";
                 } catch {
                     if (statusEl) statusEl.textContent = "Error loading";
                     return;
                 }
             } else {
-                // Toggle: collapse if open, expand if closed
-                if (d.children) {
-                    // Collapse: save children array to data._children, hide from hierarchy
+                // Toggle expand/collapse
+                if (data.children !== null) {
                     data._children = data.children;
                     data.children = null;
                 } else {
-                    // Expand: restore from data._children
                     data.children = data._children || [];
                     data._children = null;
                 }
             }
 
-            rebuildAndUpdate();
+            renderTree();
         }
 
         // --- buildD3Tree: render horizontal tidy tree with D3 ---
