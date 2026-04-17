@@ -3,12 +3,7 @@ __pycache__/
 *.py[cod]
 
 # Dev tools
-.claude/
 .vscode/
-CLAUDE.md
 
 # Internal planning and dev artifacts
-docs/superpowers/
 api_spec.yaml
-state.json
-External_LoRA_Loader_PRD.pdf
