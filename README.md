@@ -15,9 +15,13 @@ External LoRA Loader solves this by letting you browse to any path directly from
 ## Features
 
 - **Drive auto-detection** — Automatically detects all mounted drives on Windows, macOS, and Linux at startup
-- **Dynamic file browser** — Type a subdirectory path and the LoRA dropdown updates automatically (500 ms debounce, no button to press)
+- **Tree-style file browser** — Click Browse to open a modal with a full expandable drive/folder tree; navigate to any location without typing paths
+- **Extension filter** — Filter the browser to Safetensors only, all LoRA types, PyTorch files, or all files
+- **Draggable and resizable modal** — Drag the browser by its header; resize from the bottom-right corner
+- **Keyboard navigation** — Press Enter to confirm a selection, Escape to close
 - **System RAM caching** — LoRAs are loaded into memory on first use; subsequent runs skip disk I/O entirely
 - **LRU eviction** — Configurable cache size cap (per node, per workflow); oldest-used LoRAs are evicted automatically when the limit is reached
+- **Cache stats display** — Shows current usage and available headroom, live-updating as LoRAs load
 - **Independent strength sliders** — Separate `model_strength` and `clip_strength` controls, matching ComfyUI's native Load LoRA node
 - **Clear Cache button** — Flush cached LoRAs directly from the node; shows freed memory in the button label
 - **Cross-platform** — Windows (`D:\`), macOS (`/Volumes/MyDrive`), and Linux (`/mnt/nas`) path formats all work
@@ -66,35 +70,38 @@ Load Checkpoint ──► External LoRA Loader ──► KSampler
                     CLIP output ──► CLIP Text Encode
 ```
 
-### 2. Select your drive
+### 2. Browse for a LoRA
 
-The **Drive** dropdown is pre-populated with all mounted drives detected at startup:
-- Windows: `C:\`, `D:\`, `E:\`, etc.
-- macOS: `/`, `/Volumes/MyDrive`, etc.
-- Linux: `/`, `/mnt/nas`, `/media/usb`, etc.
+Click the **Browse…** button on the node. A file browser modal opens, showing all detected drives.
 
-### 3. Enter a subdirectory path
+- Click a drive or folder to expand it and see its contents
+- Use the extension filter dropdown (bottom-left of the modal) to narrow results:
+  - **All LoRA types** — `.safetensors`, `.ckpt`, `.pt`, `.pth`, `.bin`
+  - **Safetensors** — `.safetensors` only
+  - **Checkpoint** — `.ckpt` only
+  - **PyTorch** — `.pt` and `.pth`
+  - **All files** — every non-hidden file
+- Click a LoRA file to select it; the filename appears in the status bar
+- Click **Select**, double-click the file, or press **Enter** to confirm
+- Press **Escape** or click **✕** to cancel
 
-Type the folder path (relative to the drive root) into **Sub Path**. Examples:
-- `AI/Models/LoRA/Styles`
-- `Users/Bob/loras`
-- `LoRA Collection/Characters`
+The modal is draggable (grab the title bar) and resizable (drag the bottom-right corner). It remembers its position and size for the session.
 
-Both forward slashes and backslashes are accepted.
+After confirming, the selected path is shown in the **selected_path** display on the node canvas.
 
-After 500 ms the **LoRA Name** dropdown updates with all `.safetensors` and `.ckpt` files found in that directory.
+### 3. Set strength
 
-### 4. Select a LoRA and set strength
-
-Pick a file from the **LoRA Name** dropdown. Adjust:
+Adjust:
 - **Model Strength** — how strongly the LoRA affects the U-Net (diffusion model)
 - **Clip Strength** — how strongly the LoRA affects text conditioning
 
 Both range from −10.0 to 10.0 (default 1.0, step 0.01). Set `lora_name` to `none` to pass the model through unchanged.
 
-### 5. Cache management
+### 4. Cache management
 
 The **Max Cache MB** widget controls how much system RAM this node may use for caching. Default is 2048 MB (2 GB). When the limit is reached, the least-recently-used LoRA is evicted.
+
+The **cache stats** line below the Clear Cache button shows current usage and available headroom (e.g., `512 MB used · 1536 MB avail`). It updates whenever Max Cache MB changes and polls every 10 seconds while ComfyUI is running.
 
 Click **Clear Cache** at any time to free all cached LoRAs. The button briefly shows how much memory was freed (e.g., `Freed 1.4 GB`).
 
@@ -106,9 +113,7 @@ Click **Clear Cache** at any time to free all cached LoRAs. The button briefly s
 |---|---|---|---|
 | `model` | MODEL | — | Incoming diffusion model |
 | `clip` | CLIP | — | Incoming CLIP model |
-| `drive` | Combo | (detected) | Drive or mount point root |
-| `sub_path` | String | `""` | Subdirectory path within the drive |
-| `lora_name` | Combo | `none` | LoRA file to load; `none` passes through unchanged |
+| `lora_name` | String | `none` | LoRA filename; set by the file browser. `none` passes through unchanged |
 | `model_strength` | Float | `1.0` | U-Net patch strength (−10 → 10) |
 | `clip_strength` | Float | `1.0` | CLIP patch strength (−10 → 10) |
 | `max_cache_mb` | Int | `2048` | Maximum RAM to use for caching (128–32768 MB) |
@@ -117,6 +122,8 @@ Click **Clear Cache** at any time to free all cached LoRAs. The button briefly s
 |---|---|---|
 | `model` | MODEL | Patched diffusion model |
 | `clip` | CLIP | Patched CLIP model |
+
+> `drive` and `sub_path` are also serialized in the workflow JSON (they store the browsed location) but are hidden on the canvas and managed automatically by the file browser.
 
 ---
 
@@ -138,16 +145,17 @@ The cache persists for the entire ComfyUI session. LoRAs stay cached across mult
 | macOS | `/`, `/Volumes/Name` | Scans `/Volumes/` |
 | Linux | `/`, `/mnt/name`, `/media/name` | Scans `/mnt/` and `/media/` |
 
-Drive detection runs once at ComfyUI startup. Drives mounted after startup will not appear in the dropdown until ComfyUI is restarted.
+Drive detection runs once at ComfyUI startup. Drives mounted after startup will not appear in the browser until ComfyUI is restarted.
 
 ---
 
 ## Troubleshooting
 
-**LoRA Name dropdown stays empty / shows "Path not found"**
-- Check that the drive and sub_path combination points to a real directory
-- Make sure the directory contains `.safetensors` or `.ckpt` files
-- Both forward slashes and backslashes work, but avoid trailing slashes
+**Browser shows a drive as inaccessible / greyed out**
+- The drive is detected but cannot be listed — check that the drive is mounted and accessible to the user running ComfyUI
+
+**LoRA Name stays `none` after selecting a file**
+- This should not happen with the file browser; if it does, click Browse again and re-select
 
 **Node doesn't appear in ComfyUI**
 - Confirm `psutil` is installed: `pip install psutil`

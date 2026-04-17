@@ -89,18 +89,45 @@ function injectStyles() {
             padding-right: 8px;
         }
         .ell-modal-footer {
-            display: flex; justify-content: space-between; align-items: center;
+            display: flex; align-items: center; gap: 8px;
             padding: 8px 14px;
             border-top: 1px solid var(--border-color, #4e4e4e);
             flex-shrink: 0;
         }
-        .ell-status-text { font-size: 12px; color: var(--input-text, #aaa); }
+        .ell-status-text {
+            flex: 1; min-width: 0;
+            font-size: 12px; color: var(--input-text, #aaa);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
         .ell-select-btn {
             padding: 5px 18px; border-radius: 4px;
             background: var(--comfy-input-bg, #444); color: var(--fg-color, #fff);
             border: 1px solid var(--border-color, #4e4e4e); cursor: pointer;
+            flex-shrink: 0;
         }
         .ell-select-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .ell-select-btn-active {
+            background: #0078d4 !important;
+            border-color: #006cbd !important;
+            color: #fff !important;
+        }
+        .ell-ext-filter {
+            background: var(--comfy-input-bg, #1a1a1a);
+            color: var(--fg-color, #ddd);
+            border: 1px solid var(--border-color, #4e4e4e);
+            border-radius: 4px;
+            font-size: 12px;
+            padding: 3px 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .ell-row-inaccessible {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .ell-row-inaccessible:hover {
+            background: none !important;
+        }
         .ell-resize-handle {
             position: absolute; right: 0; bottom: 0;
             width: 16px; height: 16px; cursor: se-resize;
@@ -114,6 +141,37 @@ function injectStyles() {
         }
     `;
     document.head.appendChild(style);
+}
+
+// ---------------------------------------------------------------------------
+// Module-level state shared across all node instances
+// ---------------------------------------------------------------------------
+
+// Cached result of GET /external_lora/loras_folder  (undefined = not fetched yet)
+let _lorasFolderCache = undefined;
+
+// Last extension filter the user chose — persists across opens and nodes
+let _lastExtFilter = ".safetensors";   // default: Safetensors only
+
+async function _fetchLorasFolder() {
+    if (_lorasFolderCache) return _lorasFolderCache;  // only cache successes; failures retry next open
+    try {
+        const resp = await fetch("/external_lora/loras_folder");
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (data.drive) {
+            _lorasFolderCache = { drive: data.drive, sub_path: data.sub_path || "" };
+            return _lorasFolderCache;
+        }
+    } catch {}
+    return null;
+}
+
+// Convert the filter select value to the API `extensions` param
+function _extParam(filter) {
+    if (!filter || filter === "")  return null;       // backend uses _SUPPORTED_EXTENSIONS
+    if (filter === "*")            return ["*"];      // all files
+    return filter.split(",");                         // e.g. ".pt,.pth"
 }
 
 app.registerExtension({
@@ -135,6 +193,20 @@ app.registerExtension({
         loraNameWidget.type = "combo";
         loraNameWidget.options = { ...(loraNameWidget.options || {}), values: ["none"] };
         loraNameWidget.value = loraNameWidget.value || "none";
+
+        // nodeCreated fires BEFORE node.configure() writes saved widget values,
+        // so loraNameWidget.value is still the default here. onConfigure fires
+        // at the END of configure(), after widgets_values are applied — that is
+        // the first moment we can see the real saved filename and seed options
+        // so ComfyUI's missing-models validator finds the value in the list.
+        const _origOnConfigure = node.onConfigure;
+        node.onConfigure = function(info) {
+            if (_origOnConfigure) _origOnConfigure.call(this, info);
+            const v = loraNameWidget.value || "none";
+            if (v !== "none" && !loraNameWidget.options.values.includes(v)) {
+                loraNameWidget.options.values = ["none", v];
+            }
+        };
 
         // --- Debounce helper ---
         let debounceTimer = null;
@@ -187,7 +259,11 @@ app.registerExtension({
             clearTimeout(_labelTimers.get(widget));
             const origLabel = widget.label;
             widget.label = message;
-            _labelTimers.set(widget, setTimeout(() => { widget.label = origLabel; }, durationMs));
+            node.setDirtyCanvas(true, true);
+            _labelTimers.set(widget, setTimeout(() => {
+                widget.label = origLabel;
+                node.setDirtyCanvas(true, true);
+            }, durationMs));
         }
 
         // 1. Hide drive and sub_path from the canvas
@@ -218,10 +294,19 @@ app.registerExtension({
         let selectBtn = null;
         let _boxPositioned = false;
 
+        // Last folder the user browsed to in THIS node's modal (null = not opened yet)
+        let _lastBrowsePath = null;  // { drive: string, segments: string[] }
+
+        // Per-node extension filter — inherits module-level default on first open
+        let _extFilter = _lastExtFilter;
+
+        // DOM reference to the extension filter <select> (set once by buildModal)
+        let extFilterEl = null;
+
         // Shared keydown handler for Escape key
         let onKeyDown = null;
 
-        // D3 tree state (per node instance)
+        // Tree state (per node instance)
         let treeRootData = null;
         let _idCounter = 0;
 
@@ -245,12 +330,24 @@ app.registerExtension({
             treeContainerEl.innerHTML = "";
 
             function renderNode(data, depth) {
-                const isFile  = data.type === "file";
-                const isDrive = data.type === "drive";
+                const isFile        = data.type === "file";
+                const isDrive       = data.type === "drive";
+                const isInaccessible = !isFile && data.accessible === false;
+
+                // Client-side extension filter (applied to files only)
+                if (isFile && _extFilter && _extFilter !== "*") {
+                    const allowed = _extFilter.split(",");
+                    const dot = data.name.lastIndexOf(".");
+                    const ext = dot >= 0 ? data.name.slice(dot).toLowerCase() : "";
+                    if (!allowed.includes(ext)) return;
+                }
 
                 const row = document.createElement("div");
-                row.className = "ell-row" + (data._selected ? " ell-row-selected" : "");
+                row.className = "ell-row"
+                    + (data._selected    ? " ell-row-selected"     : "")
+                    + (isInaccessible    ? " ell-row-inaccessible" : "");
                 row.style.paddingLeft = (depth * 16 + 4) + "px";
+                if (isInaccessible && data.reason) row.title = data.reason;
 
                 // Arrow: ▶ collapsed, ▼ expanded, space for files
                 const arrow = document.createElement("span");
@@ -277,7 +374,7 @@ app.registerExtension({
                 row.appendChild(icon);
                 row.appendChild(label);
 
-                row.addEventListener("click", (e) => onNodeClick(e, data));
+                row.addEventListener("click", (e) => { if (!isInaccessible) onNodeClick(e, data); });
                 if (isFile) {
                     row.addEventListener("dblclick", (e) => {
                         e.stopPropagation();
@@ -308,7 +405,11 @@ app.registerExtension({
                 browserState.drive = data.drive;
                 browserState.pathSegments = data.segments.slice(0, -1);
                 browserState.selectedFile = data.name;
-                if (selectBtn) { selectBtn.disabled = false; selectBtn.textContent = "Select"; }
+                if (selectBtn) {
+                    selectBtn.disabled = false;
+                    selectBtn.textContent = "Select";
+                    selectBtn.classList.add("ell-select-btn-active");
+                }
                 if (statusEl) statusEl.textContent = data.name;
                 renderTree();
                 return;
@@ -322,18 +423,19 @@ app.registerExtension({
                     const resp = await fetch("/external_lora/browse", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ drive: data.drive, path }),
+                        body: JSON.stringify({ drive: data.drive, path, extensions: _extParam(_extFilter) }),
                     });
                     if (!resp.ok) throw new Error(resp.statusText);
                     const json = await resp.json();
                     const dirs  = json.dirs  || [];
                     const files = json.files || [];
                     data.children = [
-                        ...dirs.map(name => ({
-                            name, type: "dir", drive: data.drive,
-                            segments: [...data.segments, name],
+                        ...dirs.map(d => ({
+                            name: d.name, type: "dir", drive: data.drive,
+                            segments: [...data.segments, d.name],
                             _loaded: false, children: null, _children: null,
-                            _id: _nextId(), _selected: false
+                            _id: _nextId(), _selected: false,
+                            accessible: d.accessible, reason: d.reason,
                         })),
                         ...files.map(name => ({
                             name, type: "file", drive: data.drive,
@@ -345,6 +447,8 @@ app.registerExtension({
                     data._children = null;
                     data._loaded = true;
                     if (statusEl) statusEl.textContent = "";
+                    // Remember this folder as the last browsed location
+                    _lastBrowsePath = { drive: data.drive, segments: [...data.segments] };
                 } catch {
                     if (statusEl) statusEl.textContent = "Error loading";
                     return;
@@ -376,17 +480,18 @@ app.registerExtension({
                         const resp = await fetch("/external_lora/browse", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ drive: cur.drive, path })
+                            body: JSON.stringify({ drive: cur.drive, path, extensions: _extParam(_extFilter) }),
                         });
                         if (!resp.ok) throw new Error(resp.statusText);
                         const json = await resp.json();
                         cur._loaded = true;
                         cur.children = [
-                            ...(json.dirs  || []).map(name => ({
-                                name, type: "dir",  drive: cur.drive,
-                                segments: [...cur.segments, name],
+                            ...(json.dirs || []).map(d => ({
+                                name: d.name, type: "dir", drive: cur.drive,
+                                segments: [...cur.segments, d.name],
                                 _loaded: false, children: null, _children: null,
-                                _id: _nextId(), _selected: false
+                                _id: _nextId(), _selected: false,
+                                accessible: d.accessible, reason: d.reason,
                             })),
                             ...(json.files || []).map(name => ({
                                 name, type: "file", drive: cur.drive,
@@ -521,13 +626,33 @@ app.registerExtension({
             // Footer
             const footer = document.createElement("div");
             footer.className = "ell-modal-footer";
+
+            // Extension filter select
+            extFilterEl = document.createElement("select");
+            extFilterEl.className = "ell-ext-filter";
+            [
+                { value: "",          label: "All LoRA types" },
+                { value: ".safetensors", label: "Safetensors" },
+                { value: ".ckpt",     label: "Checkpoint" },
+                { value: ".pt,.pth",  label: "PyTorch" },
+                { value: "*",         label: "All files" },
+            ].forEach(({ value, label }) => {
+                const opt = document.createElement("option");
+                opt.value = value;
+                opt.textContent = label;
+                extFilterEl.appendChild(opt);
+            });
+
             statusEl = document.createElement("span");
             statusEl.className = "ell-status-text";
+
             selectBtn = document.createElement("button");
             selectBtn.className = "ell-select-btn";
             selectBtn.textContent = "Select";
             selectBtn.disabled = true;
             selectBtn.onclick = commitSelection;
+
+            footer.appendChild(extFilterEl);
             footer.appendChild(statusEl);
             footer.appendChild(selectBtn);
 
@@ -562,14 +687,38 @@ app.registerExtension({
             document.addEventListener("keydown", onKeyDown);
 
             browserState.selectedFile = null;
-            if (selectBtn) { selectBtn.disabled = true; selectBtn.textContent = "Select"; }
+            if (selectBtn) {
+                selectBtn.disabled = true;
+                selectBtn.textContent = "Select";
+                selectBtn.classList.remove("ell-select-btn-active");
+            }
             if (statusEl) statusEl.textContent = "Loading drives\u2026";
 
+            // Sync filter select to current per-node value
+            if (extFilterEl) {
+                extFilterEl.value = _extFilter;
+                // Wire change handler (safe to re-attach; handler is idempotent via replace)
+                extFilterEl.onchange = async () => {
+                    _extFilter = extFilterEl.value;
+                    _lastExtFilter = _extFilter;
+                    // Re-init the tree so new folders load with the updated filter
+                    treeRootData = null;
+                    await _initTree();
+                };
+            }
+
+            await _initTree();
+        }
+
+        // Fetch drives, rebuild treeRootData, then navigate to the best-known path.
+        // Called on first open and on filter change.
+        async function _initTree() {
+            if (statusEl) statusEl.textContent = "Loading drives\u2026";
             try {
                 const resp = await fetch("/external_lora/browse", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({})
+                    body: JSON.stringify({}),
                 });
                 if (!resp.ok) throw new Error(resp.statusText);
                 const data = await resp.json();
@@ -579,21 +728,36 @@ app.registerExtension({
                     name: "root", type: "root", drive: "", segments: [],
                     _loaded: true, _id: _nextId(), _selected: false,
                     children: drives.map(d => ({
-                        name: d, type: "drive", drive: d, segments: [],
+                        name: d.name, type: "drive", drive: d.name, segments: [],
                         _loaded: false, children: null, _children: null,
-                        _id: _nextId(), _selected: false
+                        _id: _nextId(), _selected: false,
+                        accessible: d.accessible, reason: d.reason,
                     }))
                 };
 
                 if (statusEl) statusEl.textContent = "";
                 renderTree();
 
+                // Navigation priority:
+                // 1. Last folder the user manually browsed to (within this session)
+                // 2. The folder of the currently-selected LoRA (from widget values)
+                // 3. ComfyUI's loras folder (first open, nothing saved)
                 const savedDrive = driveWidget.value || "";
                 const savedPath  = subPathWidget.value || "";
                 const savedFile  = loraNameWidget.value !== "none" ? loraNameWidget.value : null;
-                if (savedDrive) {
+
+                if (_lastBrowsePath && _lastBrowsePath.drive) {
+                    await autoExpandToPath(_lastBrowsePath.drive, _lastBrowsePath.segments, savedFile);
+                } else if (savedDrive && (savedFile || savedPath)) {
+                    // Navigate to the saved location even when no file is selected yet
                     const segs = savedPath ? savedPath.split(/[/\\]/).filter(Boolean) : [];
                     await autoExpandToPath(savedDrive, segs, savedFile);
+                } else {
+                    const lf = await _fetchLorasFolder();
+                    if (lf && lf.drive) {
+                        const segs = lf.sub_path ? lf.sub_path.split("/").filter(Boolean) : [];
+                        await autoExpandToPath(lf.drive, segs, null);
+                    }
                 }
             } catch {
                 if (statusEl) statusEl.textContent = "Failed to load drives";
@@ -614,6 +778,9 @@ app.registerExtension({
             const drive    = browserState.drive;
             const subPath  = browserState.pathSegments.join("/");
             const loraName = browserState.selectedFile;
+
+            // Remember this location for the next modal open
+            _lastBrowsePath = { drive, segments: [...browserState.pathSegments] };
 
             // Write back to hidden widgets
             driveWidget.value    = drive;
@@ -661,14 +828,65 @@ app.registerExtension({
                     ? `Freed ${(mb / 1024).toFixed(1)} GB`
                     : `Freed ${mb.toFixed(1)} MB`;
                 showTempLabel(clearCacheBtn, label, 2000);
+                refreshCacheStats();   // update stats line after clearing
             } catch (err) {
                 console.error("[ExternalLoraLoader] Clear cache failed:", err);
                 showTempLabel(clearCacheBtn, "Cache clear failed", 2000);
             }
         });
 
-        // --- Widget order splice (after all three addWidget calls) ---
-        // Final canvas order: drive(hidden), sub_path(hidden), selected_path, Browse…, lora_name, Clear Cache
+        // --- Cache stats display (sits below Clear Cache button) ---
+        const cacheStatsWidget = node.addWidget("text", "cache_stats", "\u2014", () => {});
+        setTimeout(() => {
+            if (cacheStatsWidget.inputEl) {
+                cacheStatsWidget.inputEl.readOnly              = true;
+                cacheStatsWidget.inputEl.style.color           = "#888";
+                cacheStatsWidget.inputEl.style.fontSize        = "11px";
+                cacheStatsWidget.inputEl.style.textAlign       = "center";
+                cacheStatsWidget.inputEl.style.cursor          = "default";
+                cacheStatsWidget.inputEl.style.userSelect      = "none";
+                cacheStatsWidget.inputEl.style.pointerEvents   = "none";
+            }
+        }, 0);
+
+        const maxCacheMbWidget = node.widgets.find(w => w.name === "max_cache_mb");
+
+        async function refreshCacheStats() {
+            try {
+                const resp = await fetch("/external_lora/cache_stats");
+                if (!resp.ok) return;
+                const d = await resp.json();
+                const maxMb   = maxCacheMbWidget ? maxCacheMbWidget.value : d.max_mb;
+                const availMb = maxMb - d.used_mb;
+                const fmtUsed = mb => mb >= 1024
+                    ? `${(mb / 1024).toFixed(1)} GB`
+                    : `${Number(mb).toFixed(0)} MB`;
+                cacheStatsWidget.value =
+                    `${fmtUsed(d.used_mb)} used \u00b7 ${Number(availMb).toFixed(0)} MB avail`;
+                node.setDirtyCanvas(true, true);
+            } catch {}
+        }
+
+        if (maxCacheMbWidget) {
+            const _origMaxCacheCallback = maxCacheMbWidget.callback;
+            maxCacheMbWidget.callback = (...args) => {
+                if (_origMaxCacheCallback) _origMaxCacheCallback(...args);
+                refreshCacheStats();
+            };
+        }
+
+        refreshCacheStats();
+
+        // Poll cache stats every 10 s so the display stays current as LoRAs are loaded
+        const _statsInterval = setInterval(refreshCacheStats, 10_000);
+        const _origOnRemoved = node.onRemoved;
+        node.onRemoved = function() {
+            clearInterval(_statsInterval);
+            if (_origOnRemoved) _origOnRemoved.call(this);
+        };
+
+        // --- Widget order splice ---
+        // Final canvas order: drive(hidden), sub_path(hidden), selected_path, Browse…, lora_name, …, Clear Cache, cache_stats
         {
             const _loraIdx = node.widgets.indexOf(loraNameWidget);
             const _btnIdx  = node.widgets.indexOf(browseBtn);

@@ -1,9 +1,11 @@
 """
 api.py — aiohttp route handlers for the External LoRA Loader custom node.
 
-Registers four routes on ComfyUI's aiohttp server:
+Registers six routes on ComfyUI's aiohttp server:
   POST /external_lora/list_files  — list .safetensors/.ckpt files in a directory
   POST /external_lora/clear_cache — flush the in-memory LoRA tensor cache
+  GET  /external_lora/cache_stats — return current and max cache usage in MB
+  GET  /external_lora/loras_folder — return ComfyUI's configured loras folder
   GET  /external_lora/drives      — return detected drive/mount-point list
   POST /external_lora/browse      — browse directories and files interactively
 """
@@ -42,6 +44,17 @@ DRIVE_LIST: list = _detect_drives()
 # Route handlers
 # ---------------------------------------------------------------------------
 
+def _probe_dir(path: str) -> tuple:
+    """Return (accessible: bool, reason: str | None) by attempting to list the directory."""
+    try:
+        os.listdir(path)
+        return True, None
+    except PermissionError:
+        return False, "Access denied"
+    except OSError as e:
+        return False, e.strerror if e.strerror else "Unavailable"
+
+
 def _is_within_drive(full_path: str, drive_list: list) -> bool:
     """Return True if full_path is at or below one of the known drive roots."""
     fp = os.path.normpath(full_path)
@@ -53,14 +66,14 @@ def _is_within_drive(full_path: str, drive_list: list) -> bool:
     return False
 
 
-_SUPPORTED_EXTENSIONS = {".safetensors", ".ckpt"}
+_SUPPORTED_EXTENSIONS = {".safetensors", ".ckpt", ".pt", ".pth", ".bin"}
 
 
 async def _list_files_handler(request: web.Request) -> web.Response:
     """POST /external_lora/list_files
 
     Request JSON: {"drive": "D:/", "path": "AI/Models/LoRA"}
-    Response JSON: {"files": ["none", ...], "error": null | "not_found"}
+    Response JSON: {"files": ["none", ...], "error": null | "bad_request" | "forbidden" | "not_found"}
     """
     try:
         body = await request.json()
@@ -105,6 +118,41 @@ async def _clear_cache_handler(request: web.Request) -> web.Response:
     return web.json_response({"status": "cleared", "freed_mb": round(freed_mb, 2)})
 
 
+async def _cache_stats_handler(request: web.Request) -> web.Response:
+    """GET /external_lora/cache_stats
+
+    Response JSON: {"used_mb": float, "max_mb": float}
+    """
+    return web.json_response({
+        "used_mb": round(LORA_CACHE.current_mb(), 2),
+        "max_mb":  LORA_CACHE.max_mb,
+    })
+
+
+async def _loras_folder_handler(request: web.Request) -> web.Response:
+    """GET /external_lora/loras_folder
+
+    Response JSON: {"drive": "C:\\", "sub_path": "path/to/loras"}
+    Returns empty strings if the ComfyUI loras path cannot be determined.
+    """
+    try:
+        import folder_paths
+        dirs = folder_paths.get_folder_paths("loras")
+        if dirs:
+            full = os.path.normpath(dirs[0])
+            drive, tail = os.path.splitdrive(full)
+            if drive:  # Windows — e.g. "C:"
+                drive = drive + os.sep
+                sub   = tail.lstrip(os.sep).replace(os.sep, "/")
+            else:       # Unix — no drive component
+                drive = "/"
+                sub   = tail.lstrip("/")
+            return web.json_response({"drive": drive, "sub_path": sub})
+    except Exception:
+        pass
+    return web.json_response({"drive": "", "sub_path": ""})
+
+
 async def _drives_handler(request: web.Request) -> web.Response:
     """GET /external_lora/drives
 
@@ -129,9 +177,22 @@ async def _browse_handler(request: web.Request) -> web.Response:
     drive = body.get("drive", "")
     path  = body.get("path", "")
 
-    # Root sentinel: no drive → return drive list
+    # Resolve extension filter for this request
+    extensions_raw = body.get("extensions", None)
+    if extensions_raw == ["*"]:
+        ext_filter = None  # accept every non-hidden file
+    elif extensions_raw:
+        ext_filter = {e.lower() for e in extensions_raw if e.startswith(".")}
+    else:
+        ext_filter = _SUPPORTED_EXTENSIONS
+
+    # Root sentinel: no drive → return probed drive list
     if not drive:
-        return web.json_response({"dirs": DRIVE_LIST, "files": [], "error": None})
+        entries = []
+        for d in DRIVE_LIST:
+            accessible, reason = _probe_dir(d)
+            entries.append({"name": d, "accessible": accessible, "reason": reason})
+        return web.json_response({"dirs": entries, "files": [], "error": None})
 
     full_path = os.path.normpath(os.path.join(drive, path))
 
@@ -149,13 +210,14 @@ async def _browse_handler(request: web.Request) -> web.Response:
                 continue
             entry = os.path.join(full_path, name)
             if os.path.isdir(entry):
-                dirs.append(name)
-            elif os.path.splitext(name)[1].lower() in _SUPPORTED_EXTENSIONS:
+                accessible, reason = _probe_dir(entry)
+                dirs.append({"name": name, "accessible": accessible, "reason": reason})
+            elif ext_filter is None or os.path.splitext(name)[1].lower() in ext_filter:
                 files.append(name)
     except OSError:
         return web.json_response({"dirs": [], "files": [], "error": "not_found"})
 
-    dirs.sort()
+    dirs.sort(key=lambda d: d["name"])
     files.sort()
     return web.json_response({"dirs": dirs, "files": files, "error": None})
 
@@ -171,5 +233,7 @@ def register_routes(routes) -> None:
     """
     routes.post("/external_lora/list_files")(_list_files_handler)
     routes.post("/external_lora/clear_cache")(_clear_cache_handler)
+    routes.get("/external_lora/cache_stats")(_cache_stats_handler)
+    routes.get("/external_lora/loras_folder")(_loras_folder_handler)
     routes.get("/external_lora/drives")(_drives_handler)
     routes.post("/external_lora/browse")(_browse_handler)
