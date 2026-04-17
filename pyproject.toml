@@ -11,4 +11,4 @@ Repository = "https://github.com/comfyuiattic-989/ComfyUI-External-Lora-Loader"
 [tool.comfy]
 PublisherId = "comfyui-attic"
 DisplayName = "External LoRA Loader"
-Icon = ""
+Icon = "https://avatars.githubusercontent.com/u/273807868?v=4&size=512"
