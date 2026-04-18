@@ -345,7 +345,16 @@ function buildMetaPopup() {
 }
 
 function positionMetaPopup(boxEl) {
-    if (!metaPopupEl || !boxEl) return;
+    if (!metaPopupEl) return;
+    if (_metaPopupGeo) {
+        metaPopupEl.style.left    = Math.max(0, Math.min(window.innerWidth  - 40, _metaPopupGeo.left)) + "px";
+        metaPopupEl.style.top     = Math.max(0, Math.min(window.innerHeight - 40, _metaPopupGeo.top))  + "px";
+        metaPopupEl.style.width   = (_metaPopupGeo.width  || 280) + "px";
+        metaPopupEl.style.height  = (_metaPopupGeo.height || 300) + "px";
+        metaPopupEl.style.opacity = "1";
+        return;
+    }
+    if (!boxEl) return;
     const rect = boxEl.getBoundingClientRect();
     const popW = 280;
     const gap  = 8;
