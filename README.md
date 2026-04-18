@@ -86,7 +86,7 @@ Click the **Browse…** button on the node. A file browser modal opens, showing 
 - Click **Select**, double-click the file, or press **Enter** to confirm
 - Press **Escape** or click **✕** to cancel
 
-The modal is draggable (grab the title bar) and resizable (drag the bottom-right corner). It remembers its position and size for the session.
+The modal is draggable (grab the title bar) and resizable (drag the bottom-right corner). It remembers its position and size for the session. When reopened, it automatically navigates to the folder of the currently selected LoRA and highlights the file.
 
 #### Metadata popup
 
@@ -100,6 +100,8 @@ Single-clicking any `.safetensors` file opens a floating info panel to the right
 | **About** | Title, author, license, and training notes / trigger-word hints left by the creator |
 
 Files without embedded metadata (non-safetensors formats, or safetensors files that omit `__metadata__`) still show filesystem info in the Overview tab; the remaining tabs display a "No embedded metadata" message.
+
+The popup is draggable (grab its title bar) and resizable (drag the bottom-right corner). Its position and size are remembered for the session.
 
 The popup closes when you click a folder, confirm a selection, or close the browser.
 
