@@ -372,6 +372,28 @@ function buildMetaPopup() {
     metaPopupEl.appendChild(popHeader);
     metaPopupEl.appendChild(tabBar);
     metaPopupEl.appendChild(popBody);
+    const metaResizeHandle = document.createElement("div");
+    metaResizeHandle.className = "ell-meta-resize-handle";
+    metaResizeHandle.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        const startX = e.clientX, startY = e.clientY;
+        const initW  = metaPopupEl.offsetWidth, initH = metaPopupEl.offsetHeight;
+        metaResizeHandle.setPointerCapture(e.pointerId);
+        document.body.style.userSelect = "none";
+        function onMove(ev) {
+            metaPopupEl.style.width  = Math.max(200, initW + (ev.clientX - startX)) + "px";
+            metaPopupEl.style.height = Math.max(150, initH + (ev.clientY - startY)) + "px";
+        }
+        function onUp() {
+            metaResizeHandle.removeEventListener("pointermove", onMove);
+            metaResizeHandle.removeEventListener("pointerup",   onUp);
+            document.body.style.userSelect = "";
+            _saveMetaPopupGeo();
+        }
+        metaResizeHandle.addEventListener("pointermove", onMove);
+        metaResizeHandle.addEventListener("pointerup",   onUp);
+    });
+    metaPopupEl.appendChild(metaResizeHandle);
     document.body.appendChild(metaPopupEl);
 }
 
