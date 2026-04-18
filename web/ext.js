@@ -322,6 +322,25 @@ function buildMetaPopup() {
     popClose.onclick = hideMetaPopup;
     popHeader.appendChild(popTitle);
     popHeader.appendChild(popClose);
+    popHeader.addEventListener("pointerdown", (e) => {
+        if (e.target.closest(".ell-meta-popup-close")) return;
+        const startX = e.clientX - metaPopupEl.offsetLeft;
+        const startY = e.clientY - metaPopupEl.offsetTop;
+        popHeader.setPointerCapture(e.pointerId);
+        document.body.style.userSelect = "none";
+        function onMove(ev) {
+            metaPopupEl.style.left = Math.max(40 - metaPopupEl.offsetWidth, Math.min(window.innerWidth  - 40, ev.clientX - startX)) + "px";
+            metaPopupEl.style.top  = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - startY)) + "px";
+        }
+        function onUp() {
+            popHeader.removeEventListener("pointermove", onMove);
+            popHeader.removeEventListener("pointerup",   onUp);
+            document.body.style.userSelect = "";
+            _saveMetaPopupGeo();
+        }
+        popHeader.addEventListener("pointermove", onMove);
+        popHeader.addEventListener("pointerup",   onUp);
+    });
 
     const tabBar = document.createElement("div");
     tabBar.className = "ell-meta-tabs";
