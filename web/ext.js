@@ -907,6 +907,37 @@ app.registerExtension({
                 cur = next;
             }
 
+            // Load the final folder so its files are visible and can be highlighted
+            if (!cur._loaded) {
+                const path = cur.segments.join("/");
+                try {
+                    const resp = await fetch("/external_lora/browse", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ drive: cur.drive, path, extensions: _extParam(_extFilter) }),
+                    });
+                    if (resp.ok) {
+                        const json = await resp.json();
+                        cur._loaded = true;
+                        cur.children = [
+                            ...(json.dirs || []).map(d => ({
+                                name: d.name, type: "dir", drive: cur.drive,
+                                segments: [...cur.segments, d.name],
+                                _loaded: false, children: null, _children: null,
+                                _id: _nextId(), _selected: false,
+                                accessible: d.accessible, reason: d.reason,
+                            })),
+                            ...(json.files || []).map(name => ({
+                                name, type: "file", drive: cur.drive,
+                                segments: [...cur.segments, name],
+                                _loaded: true, children: null, _children: null,
+                                _id: _nextId(), _selected: false,
+                            })),
+                        ];
+                    }
+                } catch {}
+            }
+
             // Highlight saved file
             if (savedFile && cur.children) {
                 const fileNode = cur.children.find(c => c.type === "file" && c.name === savedFile);
