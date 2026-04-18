@@ -1,6 +1,13 @@
 # ComfyUI External LoRA Loader
 
+[![CI](https://github.com/comfyuiattic-989/comfyui-image-compress/actions/workflows/ci.yml/badge.svg)](https://github.com/comfyuiattic-989/comfyui-image-compress/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![ComfyUI](https://img.shields.io/badge/ComfyUI-custom--node-blueviolet)](https://github.com/comfyanonymous/ComfyUI)
+
 A ComfyUI custom node that lets you load LoRA files from **any path on any mounted drive** — no server restarts, no manual config edits, no symlinks.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/L4L61XEMBR)
 
 ---
 
@@ -26,6 +33,8 @@ External LoRA Loader solves this by letting you browse to any path directly from
 - **Independent strength sliders** — Separate `model_strength` and `clip_strength` controls, matching ComfyUI's native Load LoRA node
 - **Clear Cache button** — Flush cached LoRAs directly from the node; shows freed memory in the button label
 - **Cross-platform** — Windows (`D:\`), macOS (`/Volumes/MyDrive`), and Linux (`/mnt/nas`) path formats all work
+
+![Example_01--Node.png](<examples/Example_01--Node.png>)
 
 ---
 
@@ -72,6 +81,8 @@ Load Checkpoint ──► External LoRA Loader ──► KSampler
 ```
 
 ### 2. Browse for a LoRA
+
+![Example_02--Browse.gif](<examples/Example_02--Browse.gif>)
 
 Click the **Browse…** button on the node. A file browser modal opens, showing all detected drives.
 
@@ -188,3 +199,5 @@ Drive detection runs once at ComfyUI startup. Drives mounted after startup will 
 ## License
 
 MIT — see [LICENSE](LICENSE)
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/L4L61XEMBR)

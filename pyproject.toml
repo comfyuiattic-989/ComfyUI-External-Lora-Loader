@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-external-lora-loader"
 description = "Load LoRA files from any path on any mounted drive, with a tree-style file browser and LRU RAM cache."
-version = "1.0.0"
+version = "1.0.1"
 license = { file = "LICENSE" }
 dependencies = ["psutil"]
 
