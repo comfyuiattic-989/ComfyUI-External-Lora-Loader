@@ -190,8 +190,10 @@ async def _browse_handler(request: web.Request) -> web.Response:
     else:
         ext_filter = _SUPPORTED_EXTENSIONS
 
-    # Root sentinel: no drive → return probed drive list
+    # Root sentinel: no drive → re-detect drives then return probed list
     if not drive:
+        global DRIVE_LIST
+        DRIVE_LIST = _detect_drives()
         entries = []
         for d in DRIVE_LIST:
             accessible, reason = _probe_dir(d)
