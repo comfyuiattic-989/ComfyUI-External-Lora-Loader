@@ -232,6 +232,18 @@ function injectStyles() {
             cursor: default;
             white-space: nowrap;
         }
+        .ell-meta-popup-header { cursor: move; }
+        .ell-meta-resize-handle {
+            position: absolute; right: 0; bottom: 0;
+            width: 14px; height: 14px; cursor: se-resize;
+            background: linear-gradient(135deg,
+                transparent 50%,
+                var(--border-color, #666) 50%, var(--border-color, #666) 60%,
+                transparent 60%, transparent 70%,
+                var(--border-color, #666) 70%, var(--border-color, #666) 80%,
+                transparent 80%);
+            opacity: 0.5;
+        }
     `;
     document.head.appendChild(style);
 }
