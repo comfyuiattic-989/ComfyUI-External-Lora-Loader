@@ -139,6 +139,99 @@ function injectStyles() {
                 transparent 80%);
             opacity: 0.6;
         }
+        .ell-meta-popup {
+            position: fixed;
+            background: var(--comfy-menu-bg, #353535);
+            border-radius: 8px;
+            box-shadow: 0 4px 32px rgba(0,0,0,0.6);
+            display: flex; flex-direction: column;
+            overflow: hidden;
+            z-index: 10000;
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+            color: var(--fg-color, #ddd);
+            min-width: 200px;
+        }
+        .ell-meta-popup-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color, #4e4e4e);
+            flex-shrink: 0;
+        }
+        .ell-meta-popup-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--input-text, #aaa);
+            font-weight: bold;
+        }
+        .ell-meta-popup-close {
+            background: none; border: none; color: var(--fg-color, #fff);
+            cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 4px;
+        }
+        .ell-meta-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border-color, #4e4e4e);
+            flex-shrink: 0;
+        }
+        .ell-meta-tab {
+            flex: 1;
+            background: none; border: none; border-bottom: 2px solid transparent;
+            color: var(--input-text, #aaa); cursor: pointer;
+            padding: 6px 4px; font-size: 11px;
+        }
+        .ell-meta-tab:hover { color: var(--fg-color, #ddd); }
+        .ell-meta-tab-active {
+            color: #fff !important;
+            border-bottom-color: #0078d4 !important;
+        }
+        .ell-meta-body {
+            flex: 1; overflow-y: auto; padding: 8px;
+            background: var(--comfy-input-bg, #1a1a1a);
+        }
+        .ell-meta-grid {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 4px 10px;
+            align-items: baseline;
+        }
+        .ell-meta-key {
+            color: var(--input-text, #888);
+            font-size: 11px;
+            text-align: right;
+            white-space: nowrap;
+        }
+        .ell-meta-val {
+            color: var(--fg-color, #ddd);
+            font-size: 12px;
+            word-break: break-word;
+        }
+        .ell-meta-empty {
+            color: var(--input-text, #666);
+            font-size: 12px;
+            text-align: center;
+            padding: 24px 8px;
+            font-style: italic;
+        }
+        .ell-meta-loading {
+            color: var(--input-text, #888);
+            font-size: 12px;
+            text-align: center;
+            padding: 24px 8px;
+        }
+        .ell-meta-tag-list {
+            display: flex; flex-wrap: wrap; gap: 4px;
+            padding: 2px 0;
+        }
+        .ell-meta-tag {
+            background: rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 2px 8px;
+            font-size: 11px;
+            color: var(--fg-color, #ddd);
+            cursor: default;
+            white-space: nowrap;
+        }
     `;
     document.head.appendChild(style);
 }
@@ -152,6 +245,11 @@ let _lorasFolderCache = undefined;
 
 // Last extension filter the user chose — persists across opens and nodes
 let _lastExtFilter = ".safetensors";   // default: Safetensors only
+
+// Metadata popup state (shared across all node instances; only one popup shown at a time)
+let metaPopupEl = null;
+let _metaActiveTab = "overview";
+let _metaFetchSeq  = 0;
 
 async function _fetchLorasFolder() {
     if (_lorasFolderCache) return _lorasFolderCache;  // only cache successes; failures retry next open
@@ -173,6 +271,229 @@ function _extParam(filter) {
     if (filter === "*")            return ["*"];      // all files
     return filter.split(",");                         // e.g. ".pt,.pth"
 }
+
+// ---------------------------------------------------------------------------
+// Metadata popup (module-level; shared across nodes)
+// ---------------------------------------------------------------------------
+
+function _escHtml(str) {
+    return String(str)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function buildMetaPopup() {
+    if (metaPopupEl) return;
+    metaPopupEl = document.createElement("div");
+    metaPopupEl.className = "ell-meta-popup";
+    metaPopupEl.style.display = "none";
+
+    const popHeader = document.createElement("div");
+    popHeader.className = "ell-meta-popup-header";
+    const popTitle = document.createElement("span");
+    popTitle.className = "ell-meta-popup-title";
+    popTitle.textContent = "LoRA Info";
+    const popClose = document.createElement("button");
+    popClose.className = "ell-meta-popup-close";
+    popClose.textContent = "\u2715";
+    popClose.onclick = hideMetaPopup;
+    popHeader.appendChild(popTitle);
+    popHeader.appendChild(popClose);
+
+    const tabBar = document.createElement("div");
+    tabBar.className = "ell-meta-tabs";
+    for (const [id, label] of [["overview","Overview"],["training","Training"],["tags","Tags"],["about","About"]]) {
+        const tab = document.createElement("button");
+        tab.className = "ell-meta-tab" + (id === _metaActiveTab ? " ell-meta-tab-active" : "");
+        tab.textContent = label;
+        tab.dataset.tab = id;
+        tab.onclick = () => {
+            _metaActiveTab = id;
+            metaPopupEl.querySelectorAll(".ell-meta-tab").forEach(t =>
+                t.classList.toggle("ell-meta-tab-active", t.dataset.tab === id));
+            metaPopupEl.querySelectorAll(".ell-meta-panel").forEach(p =>
+                p.style.display = p.dataset.panel === id ? "" : "none");
+        };
+        tabBar.appendChild(tab);
+    }
+
+    const popBody = document.createElement("div");
+    popBody.className = "ell-meta-body";
+    for (const id of ["overview","training","tags","about"]) {
+        const panel = document.createElement("div");
+        panel.className = "ell-meta-panel";
+        panel.dataset.panel = id;
+        panel.style.display = id === _metaActiveTab ? "" : "none";
+        popBody.appendChild(panel);
+    }
+
+    metaPopupEl.appendChild(popHeader);
+    metaPopupEl.appendChild(tabBar);
+    metaPopupEl.appendChild(popBody);
+    document.body.appendChild(metaPopupEl);
+}
+
+function positionMetaPopup(boxEl) {
+    if (!metaPopupEl || !boxEl) return;
+    const rect = boxEl.getBoundingClientRect();
+    const popW = 280;
+    const gap  = 8;
+    const vpW  = window.innerWidth;
+
+    let left;
+    if (rect.right + gap + popW <= vpW) {
+        left = rect.right + gap;
+        metaPopupEl.style.opacity = "1";
+    } else {
+        left = Math.max(rect.right - popW - 4, rect.left);
+        metaPopupEl.style.opacity = "0.96";
+    }
+    metaPopupEl.style.left   = left + "px";
+    metaPopupEl.style.top    = rect.top + "px";
+    metaPopupEl.style.width  = popW + "px";
+    metaPopupEl.style.height = rect.height + "px";
+}
+
+function _renderMetaPanels(result) {
+    if (!metaPopupEl) return;
+    const meta   = (result && result.metadata) || {};
+    const noMeta = !(result && result.metadata);
+
+    function grid(rows) {
+        if (!rows.length) return '<div class="ell-meta-empty">No data</div>';
+        return '<div class="ell-meta-grid">' +
+            rows.map(([k, v]) =>
+                `<span class="ell-meta-key">${_escHtml(k)}</span>` +
+                `<span class="ell-meta-val">${v ?? "\u2014"}</span>`
+            ).join("") + "</div>";
+    }
+
+    const noEmbed = '<div class="ell-meta-empty">No embedded metadata</div>';
+
+    // --- Overview ---
+    const ov = [];
+    if (result && result.file_size_mb != null) ov.push(["Size", result.file_size_mb + " MB"]);
+    if (result && result.modified)             ov.push(["Modified", result.modified.replace("T", " ")]);
+    if (meta.ss_base_model_version)            ov.push(["Base model", _escHtml(meta.ss_base_model_version)]);
+    const dim   = meta.ss_network_dim;
+    const alpha = meta.ss_network_alpha;
+    if (dim)   ov.push(["Rank (dim)", _escHtml(dim)]);
+    if (alpha) ov.push(["Alpha", _escHtml(alpha)]);
+    if (dim && alpha) {
+        const d = parseFloat(dim), a = parseFloat(alpha);
+        if (d > 0) ov.push(["Eff. scale", (a / d).toFixed(3)]);
+    }
+    if (meta.ss_network_module)
+        ov.push(["Network", _escHtml(meta.ss_network_module.split(".").pop())]);
+
+    // --- Training ---
+    const tr = [];
+    if (!noMeta) {
+        if (meta.ss_steps)            tr.push(["Steps",        _escHtml(meta.ss_steps)]);
+        if (meta.ss_epoch)            tr.push(["Epochs",       _escHtml(meta.ss_epoch)]);
+        if (meta.ss_num_train_images) tr.push(["Train images", _escHtml(meta.ss_num_train_images)]);
+        if (meta.ss_num_reg_images)   tr.push(["Reg images",   _escHtml(meta.ss_num_reg_images)]);
+        if (meta.ss_resolution)       tr.push(["Resolution",   _escHtml(meta.ss_resolution)]);
+        if (meta.ss_unet_lr)          tr.push(["UNet LR",      _escHtml(meta.ss_unet_lr)]);
+        if (meta.ss_text_encoder_lr)  tr.push(["TE LR",        _escHtml(meta.ss_text_encoder_lr)]);
+        else if (meta.ss_learning_rate) tr.push(["LR",         _escHtml(meta.ss_learning_rate)]);
+    }
+
+    // --- Tags ---
+    let tagHtml = noMeta ? noEmbed : "";
+    if (!noMeta) {
+        let tagFreq = meta.ss_tag_frequency;
+        if (typeof tagFreq === "string") {
+            try { tagFreq = JSON.parse(tagFreq); } catch { tagFreq = null; }
+        }
+        if (tagFreq && typeof tagFreq === "object" && !Array.isArray(tagFreq)) {
+            const merged = {};
+            for (const dir of Object.values(tagFreq)) {
+                if (dir && typeof dir === "object") {
+                    for (const [tag, count] of Object.entries(dir)) {
+                        merged[tag] = (merged[tag] || 0) + Number(count);
+                    }
+                }
+            }
+            const sorted = Object.entries(merged).sort((a, b) => b[1] - a[1]).slice(0, 40);
+            tagHtml = sorted.length
+                ? '<div class="ell-meta-tag-list">' +
+                    sorted.map(([tag, cnt]) =>
+                        `<span class="ell-meta-tag" title="${cnt} occurrences">${_escHtml(tag)}</span>`
+                    ).join("") + "</div>"
+                : '<div class="ell-meta-empty">No tags</div>';
+        } else {
+            tagHtml = '<div class="ell-meta-empty">No tag data</div>';
+        }
+    }
+
+    // --- About ---
+    const ab = [];
+    if (!noMeta) {
+        const title   = meta["modelspec.title"]       || meta.ss_output_name;
+        const author  = meta["modelspec.author"];
+        const desc    = meta["modelspec.description"] || meta.ss_training_comment;
+        const license = meta["modelspec.license"];
+        const tags    = meta["modelspec.tags"];
+        if (title)   ab.push(["Title",   _escHtml(title)]);
+        if (author)  ab.push(["Author",  _escHtml(author)]);
+        if (license) ab.push(["License", _escHtml(license)]);
+        if (tags)    ab.push(["Tags",    _escHtml(tags)]);
+        if (desc)    ab.push(["Notes",
+            `<span style="white-space:pre-wrap;display:block">${_escHtml(desc)}</span>`]);
+    }
+
+    const content = {
+        overview: grid(ov),
+        training: noMeta ? noEmbed : (tr.length ? grid(tr) : '<div class="ell-meta-empty">No training data</div>'),
+        tags:     tagHtml,
+        about:    noMeta ? noEmbed : (ab.length ? grid(ab) : '<div class="ell-meta-empty">No description</div>'),
+    };
+
+    metaPopupEl.querySelectorAll(".ell-meta-panel").forEach(p => {
+        p.innerHTML = content[p.dataset.panel] || "";
+    });
+}
+
+async function showMetaPopup(data, boxEl) {
+    buildMetaPopup();
+    positionMetaPopup(boxEl);
+    metaPopupEl.style.display = "flex";
+
+    // Sync tab active state in case it changed since last open
+    metaPopupEl.querySelectorAll(".ell-meta-tab").forEach(t =>
+        t.classList.toggle("ell-meta-tab-active", t.dataset.tab === _metaActiveTab));
+    metaPopupEl.querySelectorAll(".ell-meta-panel").forEach(p =>
+        p.style.display = p.dataset.panel === _metaActiveTab ? "" : "none");
+
+    // Loading state in every panel
+    metaPopupEl.querySelectorAll(".ell-meta-panel").forEach(p => {
+        p.innerHTML = '<div class="ell-meta-loading">Loading\u2026</div>';
+    });
+
+    const seq    = ++_metaFetchSeq;
+    const params = new URLSearchParams({
+        drive: data.drive,
+        path:  data.segments.join("/"),
+    });
+
+    let result = null;
+    try {
+        const resp = await fetch("/external_lora/metadata?" + params);
+        if (resp.ok) result = await resp.json();
+    } catch {}
+
+    if (seq !== _metaFetchSeq) return; // a newer file was clicked
+    if (!metaPopupEl || metaPopupEl.style.display === "none") return;
+
+    _renderMetaPanels(result || {});
+}
+
+function hideMetaPopup() {
+    if (metaPopupEl) metaPopupEl.style.display = "none";
+}
+
+// ---------------------------------------------------------------------------
 
 app.registerExtension({
     name: "ExternalLoraLoader",
@@ -289,6 +610,7 @@ app.registerExtension({
 
         // 6. Modal DOM (built lazily on first open)
         let modalOverlay = null;
+        let modalBoxEl   = null;
         let treeContainerEl = null;
         let statusEl = null;
         let selectBtn = null;
@@ -412,10 +734,12 @@ app.registerExtension({
                 }
                 if (statusEl) statusEl.textContent = data.name;
                 renderTree();
+                showMetaPopup(data, modalBoxEl);
                 return;
             }
 
             // Folder / drive — lazy load on first expand, then toggle
+            hideMetaPopup();
             if (!data._loaded) {
                 if (statusEl) statusEl.textContent = "Loading\u2026";
                 const path = data.segments.join("/");
@@ -601,6 +925,7 @@ app.registerExtension({
 
             const box = document.createElement("div");
             box.className = "ell-modal-box";
+            modalBoxEl = box;
 
             // Header
             const header = document.createElement("div");
@@ -766,6 +1091,7 @@ app.registerExtension({
 
         function closeModal() {
             if (modalOverlay) modalOverlay.style.display = "none";
+            hideMetaPopup();
             // Remove Escape key handler to avoid memory leak
             if (onKeyDown) {
                 document.removeEventListener("keydown", onKeyDown);

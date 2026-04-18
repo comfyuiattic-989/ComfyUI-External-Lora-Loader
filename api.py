@@ -1,18 +1,22 @@
 """
 api.py — aiohttp route handlers for the External LoRA Loader custom node.
 
-Registers six routes on ComfyUI's aiohttp server:
+Registers seven routes on ComfyUI's aiohttp server:
   POST /external_lora/list_files  — list .safetensors/.ckpt files in a directory
   POST /external_lora/clear_cache — flush the in-memory LoRA tensor cache
   GET  /external_lora/cache_stats — return current and max cache usage in MB
   GET  /external_lora/loras_folder — return ComfyUI's configured loras folder
   GET  /external_lora/drives      — return detected drive/mount-point list
   POST /external_lora/browse      — browse directories and files interactively
+  GET  /external_lora/metadata    — return file stats and embedded safetensors metadata
 """
 
 import os
 import glob
+import json as _json
 import platform
+import struct
+from datetime import datetime
 
 import psutil
 from aiohttp import web
@@ -222,6 +226,59 @@ async def _browse_handler(request: web.Request) -> web.Response:
     return web.json_response({"dirs": dirs, "files": files, "error": None})
 
 
+async def _metadata_handler(request: web.Request) -> web.Response:
+    """GET /external_lora/metadata?drive=<drive>&path=<relative_path>
+
+    Returns file system stats and, for .safetensors files, the embedded
+    __metadata__ dict parsed from the safetensors header.
+
+    Response JSON:
+      { "file_size_mb": float, "modified": "YYYY-MM-DDTHH:MM:SS",
+        "metadata": dict | null, "error": str | null }
+    """
+    drive = request.rel_url.query.get("drive", "")
+    path  = request.rel_url.query.get("path", "")
+
+    if not drive and not path:
+        return web.json_response({"file_size_mb": None, "modified": None,
+                                  "metadata": None, "error": "missing path"})
+
+    full_path = os.path.normpath(os.path.join(drive, path))
+
+    if not _is_within_drive(full_path, DRIVE_LIST):
+        return web.json_response({"file_size_mb": None, "modified": None,
+                                  "metadata": None, "error": "forbidden"})
+
+    if not os.path.isfile(full_path):
+        return web.json_response({"file_size_mb": None, "modified": None,
+                                  "metadata": None, "error": "not_found"})
+
+    stat = os.stat(full_path)
+    size_mb  = round(stat.st_size / (1024 * 1024), 2)
+    modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%dT%H:%M:%S")
+
+    metadata = None
+    if full_path.lower().endswith(".safetensors"):
+        try:
+            with open(full_path, "rb") as f:
+                raw = f.read(8)
+                if len(raw) == 8:
+                    header_len = struct.unpack_from("<Q", raw)[0]
+                    # Sanity-check: reject absurdly large headers (>64 MB)
+                    if header_len <= 64 * 1024 * 1024:
+                        header = _json.loads(f.read(header_len))
+                        metadata = header.get("__metadata__", {})
+        except Exception:
+            pass
+
+    return web.json_response({
+        "file_size_mb": size_mb,
+        "modified":     modified,
+        "metadata":     metadata,
+        "error":        None,
+    })
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
@@ -237,3 +294,4 @@ def register_routes(routes) -> None:
     routes.get("/external_lora/loras_folder")(_loras_folder_handler)
     routes.get("/external_lora/drives")(_drives_handler)
     routes.post("/external_lora/browse")(_browse_handler)
+    routes.get("/external_lora/metadata")(_metadata_handler)
