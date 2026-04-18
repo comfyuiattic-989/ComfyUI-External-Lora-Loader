@@ -250,6 +250,7 @@ let _lastExtFilter = ".safetensors";   // default: Safetensors only
 let metaPopupEl = null;
 let _metaActiveTab = "overview";
 let _metaFetchSeq  = 0;
+let _metaPopupGeo  = null;
 
 async function _fetchLorasFolder() {
     if (_lorasFolderCache) return _lorasFolderCache;  // only cache successes; failures retry next open
@@ -280,6 +281,16 @@ function _escHtml(str) {
     return String(str)
         .replace(/&/g, "&amp;").replace(/</g, "&lt;")
         .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function _saveMetaPopupGeo() {
+    if (!metaPopupEl) return;
+    _metaPopupGeo = {
+        left:   parseInt(metaPopupEl.style.left,   10),
+        top:    parseInt(metaPopupEl.style.top,    10),
+        width:  parseInt(metaPopupEl.style.width,  10),
+        height: parseInt(metaPopupEl.style.height, 10),
+    };
 }
 
 function buildMetaPopup() {
@@ -348,10 +359,11 @@ function positionMetaPopup(boxEl) {
         left = Math.max(rect.right - popW - 4, rect.left);
         metaPopupEl.style.opacity = "0.96";
     }
+    const headerH = 41, footerH = 46;
     metaPopupEl.style.left   = left + "px";
-    metaPopupEl.style.top    = rect.top + "px";
+    metaPopupEl.style.top    = (rect.top + headerH) + "px";
     metaPopupEl.style.width  = popW + "px";
-    metaPopupEl.style.height = rect.height + "px";
+    metaPopupEl.style.height = Math.max(200, rect.height - headerH - footerH) + "px";
 }
 
 function _renderMetaPanels(result) {
