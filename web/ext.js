@@ -1037,12 +1037,29 @@ app.registerExtension({
             header.className = "ell-modal-header";
             const title = document.createElement("span");
             title.textContent = "Browse for LoRA";
+            const headerBtns = document.createElement("div");
+            headerBtns.style.cssText = "display:flex;align-items:center;gap:2px";
+
+            const refreshBtn = document.createElement("button");
+            refreshBtn.className = "ell-modal-close";
+            refreshBtn.title = "Refresh drives";
+            refreshBtn.textContent = "\u21BB";
+            refreshBtn.onclick = async () => {
+                refreshBtn.disabled = true;
+                if (statusEl) statusEl.textContent = "Refreshing\u2026";
+                await _initTree();
+                refreshBtn.disabled = false;
+            };
+
             const closeBtn = document.createElement("button");
             closeBtn.className = "ell-modal-close";
             closeBtn.textContent = "\u2715";
             closeBtn.onclick = closeModal;
+
+            headerBtns.appendChild(refreshBtn);
+            headerBtns.appendChild(closeBtn);
             header.appendChild(title);
-            header.appendChild(closeBtn);
+            header.appendChild(headerBtns);
 
             // Body — scrollable tree container
             const body = document.createElement("div");
