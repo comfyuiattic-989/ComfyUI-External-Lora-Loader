@@ -17,6 +17,7 @@ External LoRA Loader solves this by letting you browse to any path directly from
 - **Drive auto-detection** — Automatically detects all mounted drives on Windows, macOS, and Linux at startup
 - **Tree-style file browser** — Click Browse to open a modal with a full expandable drive/folder tree; navigate to any location without typing paths
 - **Extension filter** — Filter the browser to Safetensors only, all LoRA types, PyTorch files, or all files
+- **LoRA metadata popup** — Single-click any `.safetensors` file to open a tabbed info panel showing base model, rank/alpha, training stats, trigger tags, and author notes without loading the file
 - **Draggable and resizable modal** — Drag the browser by its header; resize from the bottom-right corner
 - **Keyboard navigation** — Press Enter to confirm a selection, Escape to close
 - **System RAM caching** — LoRAs are loaded into memory on first use; subsequent runs skip disk I/O entirely
@@ -81,11 +82,26 @@ Click the **Browse…** button on the node. A file browser modal opens, showing 
   - **Checkpoint** — `.ckpt` only
   - **PyTorch** — `.pt` and `.pth`
   - **All files** — every non-hidden file
-- Click a LoRA file to select it; the filename appears in the status bar
+- Click a LoRA file to select it and open the **metadata popup** (see below)
 - Click **Select**, double-click the file, or press **Enter** to confirm
 - Press **Escape** or click **✕** to cancel
 
 The modal is draggable (grab the title bar) and resizable (drag the bottom-right corner). It remembers its position and size for the session.
+
+#### Metadata popup
+
+Single-clicking any `.safetensors` file opens a floating info panel to the right of the browser. It reads the file's embedded header without loading the full model into memory and displays four tabs:
+
+| Tab | Contents |
+|---|---|
+| **Overview** | File size, last modified, base model version, LoRA rank (dim), alpha, effective scale (alpha ÷ dim) |
+| **Training** | Step count, epochs, number of training images, resolution, UNet and text-encoder learning rates |
+| **Tags** | Top trigger tags extracted from `ss_tag_frequency`, sorted by frequency and shown as chips |
+| **About** | Title, author, license, and training notes / trigger-word hints left by the creator |
+
+Files without embedded metadata (non-safetensors formats, or safetensors files that omit `__metadata__`) still show filesystem info in the Overview tab; the remaining tabs display a "No embedded metadata" message.
+
+The popup closes when you click a folder, confirm a selection, or close the browser.
 
 After confirming, the selected path is shown in the **selected_path** display on the node canvas.
 
